@@ -77,15 +77,6 @@ jobs:
       - name: 编译 APK（按 ABI 分包）
         run: pnpm tauri android build --apk --target aarch64
 
-      - name: 诊断密钥（临时）
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-        run: |
-          echo "p12 sha256: $(echo "$KEYSTORE_BASE64" | base64 -d | sha256sum)"
-          echo "pwd sha256: $(printf %s "$STORE_PASSWORD" | sha256sum)"
-          echo "pwd len: $(printf %s "$STORE_PASSWORD" | wc -c)"
-
       - name: 签名 APK
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
