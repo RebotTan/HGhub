@@ -5,6 +5,7 @@ name: Release
 # 用任意 ntfy 客户端订阅同名 topic 即可；不配则只在 Actions 页面留结论。
 on:
   push:
+    branches: [dev]
     tags: ["v*"]
   workflow_dispatch:
 
