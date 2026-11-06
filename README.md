@@ -4,7 +4,7 @@
 
 **黄果短剧第三方客户端 · Rust + Tauri 2**
 
-Windows / macOS / Android 三端 · Fluent 设计 · 沉浸式竖屏播放
+Android 客户端 · Fluent 设计 · 沉浸式竖屏播放
 
 </div>
 
@@ -57,7 +57,7 @@ Windows / macOS / Android 三端 · Fluent 设计 · 沉浸式竖屏播放
 │  ├─ api.ts                 接口封装 + 本地媒体协议 URL
 │  ├─ store.tsx              全局状态（导航栈 / 用户 / 本地收藏 / 主题）
 │  ├─ html.ts                吃瓜正文清洗与图片代理
-│  ├─ components/            Feed（播放页）/ VideoSurface / PlayerControls / Panels / UI
+│  ├─ components/            Feed（播放页）/ VideoSurface / Panels / UI
 │  └─ pages/                 Home / Search / Category / Profile / Posts
 ├─ src-tauri/                Rust 后端
 │  └─ src/
@@ -72,12 +72,7 @@ Windows / macOS / Android 三端 · Fluent 设计 · 沉浸式竖屏播放
 
 ```bash
 pnpm install          # 首次安装
-pnpm app:dev          # 桌面端热重载
-pnpm app:build        # 打包：Windows → NSIS 安装程序；macOS → .app + .dmg
 ```
-
-macOS 先装 Xcode Command Line Tools（`xcode-select --install`），打包目标写在
-`src-tauri/tauri.macos.conf.json`（`app` + `dmg`，窗口用系统标题栏 Overlay）。
 
 Android（需 Android SDK + NDK，并配置 `ANDROID_HOME` / `NDK_HOME`）：
 
@@ -98,7 +93,7 @@ pnpm android:build    # 产出 APK
 1. **统一边缘信封**：站点把 `/api/**` 收敛为 `POST /api/edge/request`（`method/path/body(base64)/content_type` + `Authorization: Bearer`），本项目只对接这一个入口，无需处理 Cookie。
 2. **封面解密**：封面为 AES-128-CBC 密文，Rust 侧解密后经自定义协议输出，前端 `<img>` 直接使用。
 3. **HLS 代理**：m3u8 与分片经自定义协议转发并改写 `#EXT-X-KEY` / 分片地址，绕开 WebView 的 CORS 与防盗链。
-4. **自定义协议**：Windows / Android 为 `http://hg.localhost/*`，macOS 为 `hg://localhost/*`（Tauri 的平台差异）。
+4. **自定义协议**：`http://hg.localhost/*`（Android WebView 的自定义协议入口）。
    Rust 侧 `lib.rs` 与前端 `api.ts` 各自按平台生成一次基址，两处必须一致，否则封面与视频全部加载失败。
 5. **不做签名逆向**：只复用浏览器同源行为，接口字段均有文档与实测样本。
 

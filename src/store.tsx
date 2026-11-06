@@ -2,7 +2,6 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import { api, platform as envPlatform } from "./api";
 import type { User } from "./types";
 
-export type Platform = "android" | "windows" | "macos";
 export type Theme = "dark" | "light";
 export type Tab = "home" | "search" | "category" | "profile";
 
@@ -99,7 +98,7 @@ function applyTheme(theme: Theme) {
 }
 
 type Store = {
-  platform: Platform;
+  platform: typeof envPlatform;
   theme: Theme; setTheme: (t: Theme) => void;
   tab: Tab; setTab: (t: Tab) => void;
   stack: Page[]; push: (p: PageInput) => void; pop: () => void;
@@ -114,7 +113,6 @@ type Store = {
   addHistory: (id: number, ep?: number, t?: number, dur?: number) => void;
   clearHistory: () => void;
   toggleFollowLocal: (uid: number) => boolean;
-  theater: boolean; setTheater: (v: boolean | ((p: boolean) => boolean)) => void;
   fs: boolean; setFs: (v: boolean | ((p: boolean) => boolean)) => void;
   muted: boolean; setMuted: (v: boolean | ((p: boolean) => boolean)) => void;
   volume: number; setVolume: (v: number) => void;
@@ -134,7 +132,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loginOpen, setLoginOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [theater, setTheaterState] = useState(false);
   const [fs, setFsState] = useState(false);
   const toastSeq = useRef(0);
 
@@ -218,10 +215,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     toast("已退出登录", "info");
   }, [toast]);
 
-  const setTheater = useCallback((v: boolean | ((prev: boolean) => boolean)) => {
-    setTheaterState((prev) => (typeof v === "function" ? (v as (p: boolean) => boolean)(prev) : v));
-  }, []);
-
   const setFs = useCallback((v: boolean | ((prev: boolean) => boolean)) => {
     setFsState((prev) => (typeof v === "function" ? (v as (p: boolean) => boolean)(prev) : v));
   }, []);
@@ -243,12 +236,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isLiked: (id) => p.likes.includes(id),
     isFav: (id) => p.favs.includes(id),
     toggleLikeLocal, toggleFavLocal, toggleFollowLocal, addHistory, clearHistory,
-    muted: p.muted, setMuted, volume: p.volume, setVolume, theater, setTheater, fs, setFs,
+    muted: p.muted, setMuted, volume: p.volume, setVolume, fs, setFs,
     searchHist: p.searchHist, addSearch, clearSearchHist,
     toasts, toast,
   }), [theme, tab, setTab, stack, push, pop, user, loginOpen, logout,
     p, toggleLikeLocal, toggleFavLocal, toggleFollowLocal, addHistory, clearHistory,
-    setMuted, setVolume, addSearch, clearSearchHist, toasts, toast, theater, setTheater, fs, setFs]);
+    setMuted, setVolume, addSearch, clearSearchHist, toasts, toast, fs, setFs]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

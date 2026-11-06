@@ -61,19 +61,9 @@ export const ISendF = S(<path d="M3.6 11 19.4 3.6c.8-.4 1.6.4 1.3 1.2L14.4 20.7c
 export const IRefresh = S(<><path d="M20 12a8 8 0 1 1-2.5-5.8" /><path d="M20 3.5V7h-3.5" /></>);
 export const ISparkF = S(<path d="M12 2.5c.6 3.9 1.7 6.1 3.3 7.7 1.6 1.6 3.8 2.6 6.2 3.3-3.9.6-6.1 1.7-7.7 3.3-1.6 1.6-2.6 3.8-3.3 6.2-.6-3.9-1.7-6.1-3.3-7.7-1.6-1.6-3.8-2.6-6.2-3.3 3.9-.6 6.1-1.7 7.7-3.3 1.6-1.6 2.6-3.8 3.3-6.2Z" />, true);
 export const IAndroid = S(<><path d="M7 10.5a5 5 0 0 1 10 0v.5H7Z" fill="currentColor" stroke="none" /><path d="m8 4.5-1.2-2M16 4.5l1.2-2" /><rect x="7" y="12" width="10" height="7" rx="1.8" fill="currentColor" stroke="none" /><rect x="3.4" y="12" width="2.4" height="5.6" rx="1.2" fill="currentColor" stroke="none" /><rect x="18.2" y="12" width="2.4" height="5.6" rx="1.2" fill="currentColor" stroke="none" /><circle cx="10" cy="8.6" r=".9" fill="#06060b" stroke="none" /><circle cx="14" cy="8.6" r=".9" fill="#06060b" stroke="none" /></>);
-export const IWindows = S(<path d="M3.5 5.8 10.8 4.7v6.8H3.5Zm0 12.4 7.3 1.1v-6.7H3.5Zm8.5 1.3 8.5 1.3v-8.2H12Zm0-15v6.9h8.5V3.2Z" />, true);
-export const IMinus = S(<path d="M5 12h14" />);
-export const ISquare = S(<rect x="5.5" y="5.5" width="13" height="13" rx="1.5" />);
-export const IRotate = S(<><rect x="7" y="3.5" width="10" height="17" rx="2.2" /><path d="M2.5 9A9.8 9.8 0 0 1 5 5.5M21.5 15a9.8 9.8 0 0 1-2.5 3.5" /></>);
-export const IHist = S(<><path d="M3.8 12a8.2 8.2 0 1 1 2.4 5.8" /><path d="M3.5 13.5 3.8 17l3.4-.5" /><path d="M12 7.5v4.7l3.2 1.9" /></>);
-export const IPip = S(<><rect x="3" y="4.5" width="18" height="15" rx="2.5" /><rect x="12" y="12" width="6.5" height="4.8" rx="1.2" fill="currentColor" stroke="none" /></>);
 
 export const ISidebar = S(<><rect x="3" y="4" width="18" height="16" rx="3" /><path d="M9 4v16" /></>);
-export const IChevronUp = S(<path d="m6 14 6-6 6 6" />);
-export const IChevronDown = S(<path d="m6 10 6 6 6-6" />);
 export const IRestore = S(<><rect x="4" y="8" width="12" height="12" rx="1.5" /><path d="M8 5V4h12v12h-1" /></>);
-export const ITheater = S(<><rect x="2.5" y="5" width="19" height="14" rx="2.5" /><path d="M6.5 5v14M17.5 5v14" /></>);
-export const INext = S(<><path d="M5 5v14l10-7Z" fill="currentColor" stroke="none" /><path d="M18 5v14" /></>);
 export const IReplay = S(<><path d="M4 9a8.5 8.5 0 1 1 .5 7M4 9V3m0 6h6" /></>);
 export const IAmbient = S(<><circle cx="12" cy="12" r="3.5" /><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M5 19l1.5-1.5M17.5 6.5 19 5" /></>);
 export const ISun = S(<><circle cx="12" cy="12" r="3.4" /><path d="M12 2.8v2.2M12 19v2.2M2.8 12h2.2M19 12h2.2M5.2 5.2l1.6 1.6M17.2 17.2l1.6 1.6M18.8 5.2l-1.6 1.6M6.8 17.2l-1.6 1.6" /></>);

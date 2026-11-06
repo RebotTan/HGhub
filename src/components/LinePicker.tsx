@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, hostOf, platform, type LineItem, type LineProbe, type LineState } from "../api";
+import { api, hostOf, type LineItem, type LineProbe, type LineState } from "../api";
 import { useStore } from "../store";
-import { Modal, Sheet } from "./ui";
+import { Sheet } from "./ui";
 import { ICheck, IClose, IRefresh, ISettings } from "../icons";
 
 type ProbeMap = Record<string, LineProbe>;
@@ -103,7 +103,7 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
   const busyAll = !!probing || !!switching;
 
   const body = (
-    <div className="flex flex-col min-h-0" style={{ maxHeight: platform === "android" ? "74vh" : "min(72vh, 620px)" }}>
+    <div className="flex flex-col min-h-0" style={{ maxHeight: "74vh" }}>
       <div className="shrink-0 flex items-center gap-2 px-4 pt-3 pb-2">
         <span className="w-8 h-8 rounded-full bg-s3 flex items-center justify-center text-primary"><ISettings size={16} /></span>
         <div className="flex-1 min-w-0">
@@ -170,7 +170,5 @@ export default function LinePicker({ open, onClose }: { open: boolean; onClose: 
     </div>
   );
 
-  return platform === "android"
-    ? <Sheet open={open} onClose={onClose}>{body}</Sheet>
-    : <Modal open={open} onClose={onClose} width={460}>{body}</Modal>;
+  return <Sheet open={open} onClose={onClose}>{body}</Sheet>;
 }

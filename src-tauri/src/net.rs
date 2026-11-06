@@ -4,18 +4,13 @@
 //! 我们只实现这一个入口，其余接口都是「填 path」。
 //!
 //! # 代理（用户反馈「浏览器能开、HGhub 打不开」的根因就在这里）
+//! 客户端的流量**全部**走本文件的 reqwest，跟 WebView 无关，所以它既不共享
+//! 系统的代理设置，也不共享系统的证书库：
 //!
-//! 客户端的流量**全部**走本文件的 reqwest，跟 WebView2 无关，所以它既不共享
-//! 浏览器的代理设置，也不共享浏览器的证书库：
-//!
-//! * reqwest 只有开了 `system-proxy` feature 才会读 Windows 系统代理
-//!   （`HKCU\...\Internet Settings` 的 `ProxyEnable`/`ProxyServer`/`ProxyOverride`）。
-//!   本 crate 用 `default-features = false`，早先漏了这个 feature ⇒ 永远直连，
-//!   只有 TUN/虚拟网卡这种网络层接管才「看起来能用」。
-//! * 即使开了 `system-proxy`，PAC（`AutoConfigURL`）也不被支持，只认固定代理。
-//! * Android 没有注册表可读，系统「Wi-Fi 代理」同样不被 reqwest 采用；
-//!   安卓上只有 VPN/TUN 模式（VpnService 抓全流量）才有效。
-//!
+//! * Android 上只有 VPN/TUN 模式（VpnService 抓全流量）才生效；系统「Wi-Fi 代理」
+//!   不被 reqwest 采用。
+//! * `system-proxy` feature 仍然保留：它不影响 Android 行为，删掉反而要重新评估
+//!   reqwest 的连接逻辑。
 //! 排查手段：环境变量 `HGHUB_PROXY=http://127.0.0.1:7897` 可强制指定代理，
 //! `net_diag` 命令会输出 DNS/HTTP/环境变量快照。
 

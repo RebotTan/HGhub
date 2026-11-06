@@ -1,8 +1,7 @@
 //! 媒体层：封面解密 + HLS 代理。
 //!
 //! 站点封面是 AES-128-CBC 密文，m3u8 内部分片/key 又可能被 WebView 的 CORS 拦住，
-//! 所以图片与视频统一走本地自定义协议（Windows/Android 为 `http://hg.localhost`，
-//! macOS 为 `hg://localhost`，见 [`LOCAL_ORIGIN`]）。
+//! 所以图片与视频统一走本地自定义协议 `http://hg.localhost`，见 [`LOCAL_ORIGIN`]。
 
 use crate::net::fetch_bytes;
 use aes::cipher::{BlockDecrypt, KeyInit};
@@ -13,15 +12,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tauri::http::{Response, StatusCode};
 
-/// 本平台自定义协议的完整基址。
-///
-/// Tauri 的自定义协议地址随平台不同：Windows / Android 是 `http://<scheme>.localhost`，
-/// macOS / iOS / Linux 是 `<scheme>://localhost`。m3u8 里的分片与 key 地址按它改写。
-/// 前端 `src/api.ts` 的 `LOCAL` 必须与此一致，否则封面与视频全部加载失败。
-#[cfg(any(target_os = "windows", target_os = "android"))]
+/// 自定义协议（Android）的完整基址：`http://hg.localhost`。
+/// m3u8 里的分片与 key 地址按它改写；前端 `src/api.ts` 的 `LOCAL` 必须与此一致，
+/// 否则封面与视频全部加载失败。
 pub const LOCAL_ORIGIN: &str = "http://hg.localhost";
-#[cfg(not(any(target_os = "windows", target_os = "android")))]
-pub const LOCAL_ORIGIN: &str = "hg://localhost";
 
 const IMG_KEY: &[u8] = b"f5d965df75336270";
 const IMG_IV: &[u8] = b"97b60394abc2fbe1";

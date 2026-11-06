@@ -157,22 +157,3 @@ export function Img({ src, alt = "", className = "", eager = false, raw = false 
   );
 }
 /* ——— 右侧停靠面板（桌面评论/选集） ——— */
-export function DockPanel({ open, onClose, children, width = 372 }: {
-  open: boolean; onClose: () => void; children: React.ReactNode; width?: number;
-}) {
-  const [render, setRender] = useState(open);
-  useEffect(() => {
-    if (open) setRender(true);
-    else { const t = window.setTimeout(() => setRender(false), 230); return () => window.clearTimeout(t); }
-  }, [open]);
-  if (!render) return null;
-  return (
-    <div className="absolute inset-0 z-40 pointer-events-none">
-      <div className={`absolute inset-0 bg-black/35 pointer-events-auto ${open ? "a-fade" : "opacity-0 transition-opacity duration-200"}`} onClick={onClose} />
-      <div className={`desktop-dock absolute right-0 top-0 bottom-0 pointer-events-auto flex flex-col ${open ? "a-panel-in" : "a-panel-out"}`}
-        role="dialog" aria-label="侧边面板" style={{ width, maxWidth: "88%" }}>
-        {children}
-      </div>
-    </div>
-  );
-}

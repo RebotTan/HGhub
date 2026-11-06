@@ -8,17 +8,11 @@ import type {
 /** 应用版本（构建时由 vite.config.ts 从 package.json 注入） */
 export const APP_VERSION = __APP_VERSION__;
 
-const ua = navigator.userAgent;
-export const isAndroid = /Android/i.test(ua);
-export const isMacos = /Macintosh|Mac OS X/i.test(ua);
-export const platform: "android" | "windows" | "macos" = isAndroid ? "android" : isMacos ? "macos" : "windows";
-
-/** 自定义协议地址随平台不同（见 tauri `register_asynchronous_uri_scheme_protocol` 文档）：
- *  Windows / Android → `http://<scheme>.localhost`
- *  macOS / iOS / Linux → `<scheme>://localhost`
- *  Rust 侧 `src-tauri/src/lib.rs` 里改写 m3u8 用的 scheme 必须与此一致。 */
-export const LOCAL = isMacos ? "hg://localhost" : "http://hg.localhost";
-
+/** 唯一目标平台：Android（桌面壳已移除；保留常量供 UI 判断）。 */
+export const platform = "android" as const;
+/** 自定义协议基址：Android 为 `http://hg.localhost`
+ *  （必须与 src-tauri/src/media.rs 的 `LOCAL_ORIGIN` 一致）。 */
+export const LOCAL = "http://hg.localhost";
 /** src 是否已是本地协议地址（避免在详情页把代理地址再包一层） */
 export const isLocalMedia = (src: string) => src.startsWith(`${LOCAL}/`);
 

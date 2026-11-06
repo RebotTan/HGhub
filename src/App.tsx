@@ -12,8 +12,6 @@ import Feed from "./components/Feed";
 import { PostsPage, PostDetail } from "./pages/Posts";
 import LoginModal from "./components/LoginModal";
 import { ToastHost } from "./components/ui";
-import { DesktopRail, DesktopTitleBar } from "./components/DesktopChrome";
-import ResizeHandles from "./components/ResizeHandles";
 import { IGrid, IGridF, IHome, IHomeF, ISearch, IUser, IUserF, Logo } from "./icons";
 
 /* ============ 底部标签栏（Android）—— 细瘦纯文字、低侵入 ============ */
@@ -81,10 +79,9 @@ function StackPage({ page, onBack, wide, top, bottomInset }: {
 
 /* ============ 应用主体 ============ */
 function AppBody() {
-  const { platform, tab, setTab, stack, pop, loginOpen, setLoginOpen, fs } = useStore();
+  const { tab, setTab, stack, pop, loginOpen, setLoginOpen, fs } = useStore();
   const mainRef = useRef<HTMLDivElement>(null);
-  const [wide, setWide] = useState(platform !== "android");
-  const [collapsed, setCollapsed] = useState(false);
+  const [wide, setWide] = useState(false);
 
   useLayoutEffect(() => {
     const el = mainRef.current;
@@ -116,15 +113,14 @@ function AppBody() {
 
   const vis = (k: Tab) => (tab === k ? "absolute inset-0" : "absolute inset-0 invisible pointer-events-none");
   const pageActive = stack.length === 0 && !loginOpen;
-  const bottomInset = platform === "android" ? (fs ? 0 : 40) : 14;
+  const bottomInset = fs ? 0 : 40;
   /* 栈页（从搜索/分类/我的进入的播放页、图文页）没有底栏，
      底部只让出安全区。之前多留了 20px，视频底边会露出一条
      「底栏」似的窄缝（底部的压暗渐变到不了屏幕最底）。 */
-  const stackInset = platform === "android" ? 0 : 14;
+  const stackInset = 0;
 
   return (
-    <div className={`absolute inset-0 flex bg-canvas plat-${platform}`}>
-      {platform !== "android" && <DesktopRail collapsed={collapsed} />}
+    <div className={`absolute inset-0 flex bg-canvas plat-android`}>
       <div ref={mainRef} className="relative flex-1 min-w-0 overflow-hidden win-main">
         <div className={vis("home")}><Home active={pageActive && tab === "home"} bottomInset={bottomInset} /></div>
         <div className={vis("search")}><Search active={pageActive && tab === "search"} wide={wide} /></div>
@@ -137,80 +133,12 @@ function AppBody() {
           </div>
         ))}
 
-        {platform === "android" && !fs && stack.length === 0 && <TabBar />}
+        {!fs && stack.length === 0 && <TabBar />}
       </div>
     </div>
   );
 }
 
-/* ============ 桌面窗口壳（Windows / macOS）============ */
-function DesktopShell() {
-  const [collapsed, setCollapsed] = useState(false);
-  const { theater, platform } = useStore();
-  return (
-    <div className={`absolute inset-0 flex flex-col bg-canvas win-root plat-${platform}`}>
-      <DesktopTitleBar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
-      <div className="relative flex-1 min-h-0">
-        <ShellInner collapsed={collapsed || theater} theater={theater} />
-      </div>
-      {/* 边缘缩放热区只对无边框窗口（Windows）有效，macOS 走原生窗口边框 */}
-      {platform === "windows" && <ResizeHandles />}
-    </div>
-  );
-}
-
-function ShellInner({ collapsed, theater }: { collapsed: boolean; theater: boolean }) {
-  const { stack, pop, loginOpen, setLoginOpen, tab, setTab, platform } = useStore();
-  const mainRef = useRef<HTMLDivElement>(null);
-  const [wide, setWide] = useState(true);
-
-  useLayoutEffect(() => {
-    const el = mainRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => setWide(el.clientWidth > 640));
-    ro.observe(el);
-    setWide(el.clientWidth > 640);
-    return () => ro.disconnect();
-  }, []);
-
-  useEffect(() => {
-    const fn = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) {
-        if (e.key === "Escape") t.blur();
-        return;
-      }
-      if (loginOpen) { if (e.key === "Escape") setLoginOpen(false); return; }
-      if (e.key === "Escape") { if (stack.length) pop(); return; }
-      if (e.key === "/") { e.preventDefault(); setTab("search"); return; }
-      if (["1", "2", "3", "4"].includes(e.key) && !e.repeat) {
-        setTab((["home", "search", "category", "profile"] as Tab[])[Number(e.key) - 1]);
-      }
-    };
-    window.addEventListener("keydown", fn);
-    return () => window.removeEventListener("keydown", fn);
-  }, [stack.length, pop, setTab, loginOpen, setLoginOpen]);
-
-  const vis = (k: Tab) => (tab === k ? "absolute inset-0" : "absolute inset-0 invisible pointer-events-none");
-  const pageActive = stack.length === 0 && !loginOpen;
-
-  return (
-    <div className={`absolute inset-0 flex bg-canvas plat-${platform}`}>
-      {!theater && <DesktopRail collapsed={collapsed} />}
-      <div ref={mainRef} className={`relative flex-1 min-w-0 overflow-hidden win-main ${theater ? "is-theater-main" : ""}`}>
-        <div className={vis("home")}><Home active={pageActive && tab === "home"} bottomInset={14} /></div>
-        <div className={vis("search")}><Search active={pageActive && tab === "search"} wide={wide} /></div>
-        <div className={vis("category")}><Category wide={wide} /></div>
-        <div className={vis("profile")}><Profile wide={wide} /></div>
-        {stack.map((p, i) => (
-          <div key={p.key} className="absolute inset-0 z-30 bg-bg win-page-in" style={{ boxShadow: "-18px 0 40px rgba(0,0,0,.5)" }}>
-            <StackPage page={p} onBack={pop} wide={wide} top={i === stack.length - 1} bottomInset={14} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 /* ============ 移动端（无壳） ============ */
 function MobileShell() {
@@ -226,7 +154,7 @@ function MobileShell() {
 
 /* ============ 入口 ============ */
 export default function App() {
-  const { platform, loginOpen, setLoginOpen, tab, setTab, stack, pop, fs, setFs } = useStore();
+  const { loginOpen, setLoginOpen, tab, setTab, stack, pop, fs, setFs } = useStore();
 
   /* —— 安卓硬件返回键 ——
      层级：全屏 → 面板/弹层 → 登录框 → 页面栈 → 回首页 → 退出应用。
@@ -243,7 +171,6 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (platform !== "android") return undefined;
     let disposed = false;
     let handle: { unregister: () => Promise<void> } | null = null;
     addPluginListener("app", "back-button", () => backRef.current())
@@ -253,7 +180,7 @@ export default function App() {
       disposed = true;
       handle?.unregister().catch(() => {});
     };
-  }, [platform]);
+  }, []);
 
   useEffect(() => {
     const prevent = (e: Event) => e.preventDefault();
@@ -271,7 +198,7 @@ export default function App() {
 
   return (
     <>
-      {platform === "android" ? <MobileShell /> : <DesktopShell />}
+      <MobileShell />
       <LoginModal />
       <ToastHost />
       {/* 登录遮罩键盘处理占位 */}

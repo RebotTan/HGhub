@@ -166,36 +166,7 @@ pub async fn open_url(url: String) -> Result<(), String> {
     open_external(&url)
 }
 
-#[cfg(target_os = "windows")]
-fn open_external(url: &str) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "", url])
-        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW，别闪一下黑框
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn open_external(url: &str) -> Result<(), String> {
-    std::process::Command::new("open")
-        .arg(url)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(all(unix, not(any(target_os = "macos", target_os = "android"))))]
-fn open_external(url: &str) -> Result<(), String> {
-    std::process::Command::new("xdg-open")
-        .arg(url)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
-}
-
-#[cfg(target_os = "android")]
+/// 移动端没有「用系统默认浏览器打开」的能力，只能提示用户手动复制。
 fn open_external(_url: &str) -> Result<(), String> {
     Err("移动端请手动在浏览器打开".to_string())
 }

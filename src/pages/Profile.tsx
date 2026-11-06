@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, APP_VERSION, fmt, fmtTime, platform } from "../api";
+import { api, APP_VERSION, fmt, fmtTime } from "../api";
 import type { Detail } from "../types";
 import { useStore } from "../store";
 import { Avatar, Empty, Img } from "../components/ui";
@@ -34,12 +34,10 @@ export default function Profile({ wide }: { wide: boolean }) {
     <div className="absolute inset-0 bg-bg flex flex-col">
       <div className="shrink-0 px-4 pb-2 flex items-center" style={{ paddingTop: "calc(var(--sat, 0px) + 14px)" }}>
         <div className="text-[24px] font-bold text-on leading-none">我的</div>
-        {platform === "android" && (
-          <button onClick={() => push({ kind: "settings" })} aria-label="设置"
-            className="ml-auto w-9 h-9 rounded-full bg-s3 flex items-center justify-center text-mut pressable">
-            <ISettings size={17} strokeWidth={1.7} />
-          </button>
-        )}
+        <button onClick={() => push({ kind: "settings" })} aria-label="设置"
+          className="ml-auto w-9 h-9 rounded-full bg-s3 flex items-center justify-center text-mut pressable">
+          <ISettings size={17} strokeWidth={1.7} />
+        </button>
       </div>
 
       <div className="flex-1 scroll-y px-4 pt-2 pb-24">
@@ -126,7 +124,7 @@ export default function Profile({ wide }: { wide: boolean }) {
           )}
         </div>
 
-        <div className="text-center text-[10px] text-dim mt-5">HGhub {APP_VERSION} · {platform === "android" ? "Android" : platform === "macos" ? "macOS" : "Windows"} 客户端</div>
+        <div className="text-center text-[10px] text-dim mt-5">HGhub {APP_VERSION} · Android 客户端</div>
       </div>
     </div>
   );

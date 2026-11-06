@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { api, platform } from "../api";
+import { api } from "../api";
 import type { User } from "../types";
 import { useStore } from "../store";
-import { Modal, Sheet } from "./ui";
+import { Sheet } from "./ui";
 import { IClose, ILogin } from "../icons";
 
 export default function LoginModal() {
@@ -73,7 +73,5 @@ export default function LoginModal() {
     </div>
   );
 
-  return platform === "android"
-    ? <Sheet open={loginOpen} onClose={() => setLoginOpen(false)}>{body}</Sheet>
-    : <Modal open={loginOpen} onClose={() => setLoginOpen(false)} width={360}>{body}</Modal>;
+  return <Sheet open={loginOpen} onClose={() => setLoginOpen(false)}>{body}</Sheet>;
 }
