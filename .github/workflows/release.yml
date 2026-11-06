@@ -89,8 +89,11 @@ jobs:
           if [ -z "${KEYSTORE_BASE64:-}" ]; then
             echo "::error::缺少 ANDROID_KEY_BASE64 secret，无法签名"; exit 1
           fi
-          KS="$RUNNER_TEMP/release.keystore"
+          KS="$RUNNER_TEMP/release.p12"
           echo "$KEYSTORE_BASE64" | base64 -d > "$KS"
+          # 上传的是 PKCS12；apksigner 默认按 JKS 解析，先用 keytool 转一次
+          keytool -importkeystore -noprompt             -srckeystore "$KS" -srcstoretype PKCS12 -srcalias "$KEY_ALIAS" -srcstorepass "$STORE_PASSWORD"             -destkeystore "$RUNNER_TEMP/release.jks" -deststoretype JKS -deststorepass "$STORE_PASSWORD"             -destkeypass "$KEY_PASSWORD" -destalias "$KEY_ALIAS"
+          KS="$RUNNER_TEMP/release.jks"
           BT="$(ls "$ANDROID_SDK_ROOT/build-tools" | sort -V | tail -1)"
           APKSIGNER="$ANDROID_SDK_ROOT/build-tools/$BT/apksigner"
           mkdir -p artifacts
@@ -106,7 +109,7 @@ jobs:
             "$APKSIGNER" verify --print-certs "$out" | head -3
             found=$((found+1))
           done
-          rm -f "$KS"
+          rm -f "$RUNNER_TEMP/release.jks" "$RUNNER_TEMP/release.p12"
           if [ "$found" -eq 0 ]; then echo "::error::没有找到 release APK"; exit 1; fi
           ls -lh artifacts
 
