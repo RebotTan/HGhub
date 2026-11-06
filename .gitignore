@@ -25,5 +25,9 @@ Thumbs.db
 .env
 .env.*
 
+# 本地索引缓存
+.codegraph/
+.zvec-grep/
+
 # API
 docs/API.md
