@@ -473,7 +473,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
       </div>
 
       <div ref={boxRef} onScroll={onScroll}
-        className="absolute inset-y-0 left-0 overflow-y-scroll no-bar snap-y snap-mandatory overscroll-y-contain">
+        className="absolute inset-0 overflow-y-scroll no-bar snap-y snap-mandatory overscroll-y-contain">
         {videoIds.map((vid, i) => {
           const isActive = i === index;
           return (
