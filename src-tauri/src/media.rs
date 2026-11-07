@@ -138,7 +138,9 @@ fn hls_attributes(line: &str) -> Option<(&str, Vec<&str>)> {
     let mut quoted = false;
     let mut start = 0;
     for (i, ch) in rest.char_indices() {
-        if ch == '"' { quoted = !quoted; }
+        if ch == '"' {
+            quoted = !quoted;
+        }
         if ch == ',' && !quoted {
             attributes.push(&rest[start..i]);
             start = i + 1;
@@ -149,17 +151,26 @@ fn hls_attributes(line: &str) -> Option<(&str, Vec<&str>)> {
 }
 
 fn map_uri_attributes(line: &str, mut rewrite: impl FnMut(&str) -> String) -> String {
-    let Some((tag, attributes)) = hls_attributes(line) else { return line.to_string(); };
-    let mapped: Vec<String> = attributes.into_iter().map(|attribute| {
-        if let Some((key, value)) = attribute.split_once('=') {
-            if key.trim() == "URI" {
-                if let Some(uri) = value.trim().strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
-                    return format!("{key}=\"{}\"", rewrite(uri));
+    let Some((tag, attributes)) = hls_attributes(line) else {
+        return line.to_string();
+    };
+    let mapped: Vec<String> = attributes
+        .into_iter()
+        .map(|attribute| {
+            if let Some((key, value)) = attribute.split_once('=') {
+                if key.trim() == "URI" {
+                    if let Some(uri) = value
+                        .trim()
+                        .strip_prefix('"')
+                        .and_then(|v| v.strip_suffix('"'))
+                    {
+                        return format!("{key}=\"{}\"", rewrite(uri));
+                    }
                 }
             }
-        }
-        attribute.to_string()
-    }).collect();
+            attribute.to_string()
+        })
+        .collect();
     format!("{tag}:{}", mapped.join(","))
 }
 
@@ -191,9 +202,26 @@ fn rewrite_playlist(url: &str, text: &str, prefix: &str) -> String {
             continue;
         }
         if line.starts_with('#') {
-            // 这些可选元数据可从 JSON 或插播资源再派生 URL，不能直接交给原生播放器。
-            if line.starts_with("#EXT-X-CONTENT-STEERING:") || line.starts_with("#EXT-X-DATERANGE:")
-            {
+            // 禁用可派生 URL 的内容引导；DATERANGE 保留时间线/SCTE-35 元数据。
+            if line.starts_with("#EXT-X-CONTENT-STEERING:") {
+                continue;
+            }
+            if line.starts_with("#EXT-X-DATERANGE:") {
+                if let Some((tag, attributes)) = hls_attributes(line) {
+                    let safe: Vec<&str> = attributes
+                        .into_iter()
+                        .filter(|attribute| {
+                            let key = attribute
+                                .split('=')
+                                .next()
+                                .unwrap_or("")
+                                .trim()
+                                .to_ascii_uppercase();
+                            !key.contains("URI") && key != "X-ASSET-LIST"
+                        })
+                        .collect();
+                    out.push_str(&format!("{tag}:{}\n", safe.join(",")));
+                }
                 continue;
             }
             if line.contains("URI=\"") {
@@ -317,11 +345,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dateranges_keep_timing_and_scte_metadata_but_drop_external_resources() {
+        let line = "#EXTM3U\n#EXT-X-DATERANGE:ID=\"event\",START-DATE=\"2026-11-07T00:00:00Z\",DURATION=4,SCTE35-OUT=0xFC,X-TEXT=\"a,b\",X-ASSET-URI=\"https://evil.example/ad\",X-ASSET-LIST=\"https://evil.example/list.json\"\n";
+        let out = rewrite_playlist("https://cdn.example/master.m3u8", line, LOCAL_ORIGIN);
+        assert!(out.contains("DURATION=4,SCTE35-OUT=0xFC,X-TEXT=\"a,b\""));
+        assert!(out.contains("START-DATE="));
+        assert!(!out.contains("evil.example") && !out.contains("X-ASSET"));
+    }
+
+    #[test]
     fn every_uri_attribute_is_rewritten_without_splitting_quoted_commas() {
         let line = "#EXT-X-MEDIA:NAME=\"audio,main\",URI=\"first.m3u8\",URI=\"second.m3u8\"";
         let absolute = absolutize_uri_in_attr("https://cdn.example/master.m3u8", line);
         let rewritten = rewrite_uri_attr(&absolute, LOCAL_ORIGIN);
-        assert_eq!(rewritten.matches(&format!("{LOCAL_ORIGIN}/seg?u=")).count(), 2);
+        assert_eq!(
+            rewritten.matches(&format!("{LOCAL_ORIGIN}/seg?u=")).count(),
+            2
+        );
         assert!(rewritten.contains("NAME=\"audio,main\""));
         assert!(!rewritten.contains("URI=\"https://"));
     }
@@ -349,7 +389,8 @@ mod tests {
             .contains_key("Access-Control-Allow-Origin"));
         let optional = rewrite_playlist("https://cdn.example/list.m3u8",
             "#EXTM3U\n#EXT-X-CONTENT-STEERING:SERVER-URI=\"https://other.example/list.json\"\n#EXT-X-DATERANGE:ID=\"ad\",X-ASSET-LIST=\"http://127.0.0.1/assets\"\nsegment.ts\n", LOCAL_ORIGIN);
-        assert!(!optional.contains("CONTENT-STEERING") && !optional.contains("DATERANGE"));
+        assert!(!optional.contains("CONTENT-STEERING") && !optional.contains("X-ASSET-LIST"));
+        assert!(optional.contains("#EXT-X-DATERANGE:ID=\"ad\""));
         let bom = segment_response(
             "https://cdn.example/list.m3u8",
             None,
