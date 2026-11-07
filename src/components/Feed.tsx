@@ -5,7 +5,6 @@ import { useStore } from "../store";
 import { Avatar, Img, Sheet } from "./ui";
 import VideoSurface, { type VideoHandle } from "./VideoSurface";
 import { ArticlePanel, CommentsPanel, EpisodesPanel } from "./Panels";
-import { sanitizeHtml } from "../html";
 import { setBackHandler } from "../back";
 import {
   IBack, IBoltF, IChevR, IClose, ICommentF, ICompress, IExpand, IFileText,
@@ -142,7 +141,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   const posterUrl = cover(meta.cover, 900);
   const hasVideo = kind === "video" || !!post?.video_url;
-  const articleHtml = kind === "post" && !hasVideo ? sanitizeHtml(post?.content || "") : "";
+  const articleHtml = kind === "post" && !hasVideo ? (post?.content || "") : "";
 
   /* 分享：复制播放链接 */
   const shareLink = () => {

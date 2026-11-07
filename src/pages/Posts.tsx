@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, cover, fmt } from "../api";
 import type { Post } from "../types";
 import { useStore } from "../store";
@@ -91,6 +91,8 @@ export function PostDetail({ id, onBack }: { id: number; onBack: () => void }) {
   const [post, setPost] = useState<(Post & { content?: string; video_url?: string }) | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [play, setPlay] = useState(false);
+  const content = post?.content || "";
+  const safeHtml = useMemo(() => sanitizeHtml(content), [content, strictSecurity]);
   const openSafeLink = (url: string) => {
     api.openUrl(url).catch(() => {
       navigator.clipboard?.writeText(url).then(() => toast("链接已复制", "ok")).catch(() => {});
@@ -147,7 +149,7 @@ export function PostDetail({ id, onBack }: { id: number; onBack: () => void }) {
               </div>
               {post.content && (
                 (isHtml(post.content) || (!strictSecurity && /<[a-z][\s\S]*>/i.test(post.content)))
-                  ? <div className="article-body mt-3.5" onClick={(e) => handleArticleClick(e, openSafeLink)} dangerouslySetInnerHTML={{ __html: sanitizeHtml(post.content) }} />
+                  ? <div className="article-body mt-3.5" onClick={(e) => handleArticleClick(e, openSafeLink)} dangerouslySetInnerHTML={{ __html: safeHtml }} />
                   : <div className="mt-3.5 rounded-(--r-md) bg-s2 p-3.5 text-[12.5px] leading-relaxed text-on/80 whitespace-pre-wrap">{post.content}</div>
               )}
             </div>

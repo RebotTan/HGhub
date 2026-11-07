@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, fmt, cover as imageCover } from "../api";
 import { handleArticleClick, sanitizeHtml } from "../html";
 import type { Comment, CommentPage, Episode } from "../types";
@@ -158,8 +158,8 @@ export function CommentsPanel({ videoId, ep, total, kind = "video", onClose }: {
 export function ArticlePanel({ title, html, cover, hot, onClose }: {
   title: string; html: string; cover?: string; hot?: number; onClose: () => void;
 }) {
-  const { toast } = useStore();
-  const safeHtml = sanitizeHtml(html);
+  const { toast, strictSecurity } = useStore();
+  const safeHtml = useMemo(() => sanitizeHtml(html), [html, strictSecurity]);
   const openSafeLink = (url: string) => {
     api.openUrl(url).catch(() => {
       navigator.clipboard?.writeText(url).then(() => toast("链接已复制", "ok")).catch(() => {});
