@@ -39,7 +39,7 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -- \
 
 以上 Rust 测试跳过原有的 6 项联网测试，覆盖普通内网/FakeIP 边界、IPv4 变体、IPv6、混合 DNS 答案、重定向、凭据站点绑定、旧会话和代理脱敏，不发送真实账号信息。
 
-浏览器回归入口为 `tests/html-security.html`。启动 `pnpm dev --host 127.0.0.1` 后，在浏览器打开 `http://127.0.0.1:1420/tests/html-security.html`；结果应为 `passed: 29, failed: 0`。测试使用无害页面变量，覆盖严格及兼容模式的原 SVG 漏洞、混淆 URL、事件属性、命名空间/HTML 变异样本，以及正常排版、懒加载图片、重复清洗和安全链接。
+浏览器回归入口为 `tests/html-security.html`。启动 `pnpm dev --host 127.0.0.1` 后，在浏览器打开 `http://127.0.0.1:1420/tests/html-security.html`；结果应为 `passed: 30, failed: 0`。测试使用无害页面变量，覆盖严格及兼容模式的原 SVG 漏洞、混淆 URL、事件属性、命名空间/HTML 变异样本，以及正常排版、懒加载图片、重复清洗和安全链接。
 
 本次验证包括 macOS 上的前端构建、Rust 编译和本地测试，以及独立 Chromium 的 15 项正文回归与 5 项生产 CSP 检查；没有启动真实 Tauri 应用连接上游，也没有完成 Windows/Android 实机播放和真实 FakeIP/TUN 联调。
 

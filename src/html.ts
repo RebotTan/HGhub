@@ -117,11 +117,11 @@ const STRICT_TAGS = [
   "a", "img", "figure", "figcaption", "table", "thead", "tbody", "tr", "th", "td",
 ];
 const STRICT_INPUT_ATTR = [
-  "href", "src", "alt", "title", "colspan", "rowspan",
+  "href", "src", "alt", "title", "colspan", "rowspan", "start",
   "data-src", "data-original", "data-lazy-src",
 ];
 const STRICT_FINAL_ATTR = [
-  "href", "src", "alt", "title", "colspan", "rowspan", "target", "rel", "loading",
+  "href", "src", "alt", "title", "colspan", "rowspan", "start", "target", "rel", "loading",
 ];
 // 保留 DOMPurify 的安全 URL/普通属性值规则，并允许本应用的 macOS 图片协议。
 const SAFE_FINAL_URI = /^(?:(?:https?|ftp|ftps|tel|mailto|callto|sms|cid|xmpp|matrix):|hg:\/\/localhost\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
