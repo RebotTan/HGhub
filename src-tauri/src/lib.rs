@@ -8,6 +8,20 @@ mod session;
 use api::Api;
 use tauri::Manager;
 
+fn allowed_dev_host(host: &str) -> bool {
+    if matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]") {
+        return true;
+    }
+    if let Some(configured) = option_env!("TAURI_DEV_HOST") {
+        if host.eq_ignore_ascii_case(configured.trim()) {
+            return true;
+        }
+    }
+    std::env::var("TAURI_DEV_HOST")
+        .ok()
+        .is_some_and(|v| host.eq_ignore_ascii_case(v.trim()))
+}
+
 fn allowed_frontend_origin(origin: &str) -> bool {
     if matches!(
         origin,
@@ -15,9 +29,14 @@ fn allowed_frontend_origin(origin: &str) -> bool {
     ) {
         return true;
     }
-    // 移动端开发可能使用 TAURI_DEV_HOST，发布版不允许这些来源。
+    // 移动端开发可能使用 TAURI_DEV_HOST；严格模式下仅放行本机或显式配置的 TAURI_DEV_HOST。
     cfg!(debug_assertions)
-        && url::Url::parse(origin).is_ok_and(|u| u.scheme() == "http" && u.port() == Some(1420))
+        && url::Url::parse(origin).is_ok_and(|u| {
+            u.scheme() == "http"
+                && u.port() == Some(1420)
+                && (!network_policy::strict_security()
+                    || u.host_str().is_some_and(allowed_dev_host))
+        })
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -39,6 +58,8 @@ pub fn run() {
                 .on_navigation(|_webview, url| {
                     (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
                         || allowed_frontend_origin(&url.origin().ascii_serialization())
+                        || (!network_policy::strict_security()
+                            && matches!(url.scheme(), "http" | "https"))
                 })
                 .build(),
         )
@@ -48,9 +69,10 @@ pub fn run() {
                 .get("Origin")
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
-            if request_origin
-                .as_deref()
-                .is_some_and(|origin| !allowed_frontend_origin(origin))
+            if network_policy::strict_security()
+                && request_origin
+                    .as_deref()
+                    .is_some_and(|origin| !allowed_frontend_origin(origin))
             {
                 responder.respond(
                     tauri::http::Response::builder()
@@ -81,6 +103,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             api::app_boot,
+            api::security_set,
             api::debug_log,
             api::net_diag,
             api::line_state,

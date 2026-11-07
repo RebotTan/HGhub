@@ -60,6 +60,7 @@ pub fn trusted_auth_origin(origin: &str) -> bool {
 
 /// 启动时读回上次选择的线路（文件不存在 / 内容坏了就保持默认）。
 pub fn bind_base(dir: &std::path::Path) {
+    network_policy::bind_security(dir);
     let path = dir.join("line.json");
     if let Ok(text) = std::fs::read_to_string(&path) {
         if let Ok(v) = serde_json::from_str::<Value>(&text) {
@@ -116,10 +117,12 @@ fn build_client(host: &str, addrs: &[SocketAddr]) -> Result<reqwest::Client, Str
         .connect_timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .referer(false)
-        .resolve_to_addrs(host, addrs)
         .gzip(true)
         .brotli(true)
         .pool_idle_timeout(Duration::from_secs(60));
+    if !addrs.is_empty() {
+        builder = builder.resolve_to_addrs(host, addrs);
+    }
     if let Some(p) = proxy_override() {
         // 错误信息不能含原始代理 URL（其中可能有用户名/密码）。
         let proxy = reqwest::Proxy::all(&p).map_err(|_| "HGHUB_PROXY 配置无效（已隐藏原始值）")?;
@@ -136,10 +139,15 @@ static CLIENTS: Lazy<Mutex<HashMap<String, Arc<reqwest::Client>>>> =
 /// 每次连接前解析并检查全部 DNS 结果，再把该批地址固定给 reqwest，避免二次解析重绑定。
 /// 用户配置的系统/显式代理仍可位于 loopback；代理是用户信任的传输层，而不是请求目标。
 async fn client_for(raw: &str) -> Result<(url::Url, Arc<reqwest::Client>), String> {
-    let target = network_policy::parse_target(raw)?;
-    let addrs = network_policy::resolve_target(&target).await?;
+    let strict = network_policy::strict_security();
+    let target = network_policy::parse_target_with_mode(raw, strict)?;
+    let addrs = if strict {
+        network_policy::resolve_target(&target).await?
+    } else {
+        Vec::new()
+    };
     let host = target.host_str().ok_or("目标缺少主机名")?;
-    let key = format!("{host}:{addrs:?}");
+    let key = format!("{strict}:{host}:{addrs:?}");
     let mut cache = CLIENTS.lock().map_err(|_| "HTTP 客户端锁失败")?;
     let http = if let Some(hit) = cache.get(&key) {
         hit.clone()
@@ -346,11 +354,12 @@ pub async fn edge(
     token: Option<&str>,
 ) -> Result<Value, String> {
     let cur = normalize_base(origin).ok_or("业务请求必须使用安全 HTTPS 线路")?;
-    if (token.is_some()
-        || matches!(
-            path,
-            "/api/account/loginByPassword" | "/api/account/registerByPassword"
-        ))
+    if network_policy::strict_security()
+        && (token.is_some()
+            || matches!(
+                path,
+                "/api/account/loginByPassword" | "/api/account/registerByPassword"
+            ))
         && !trusted_auth_origin(&cur)
     {
         return Err("镜像线路仅供游客浏览；登录/注册请切换到固定线路".into());
