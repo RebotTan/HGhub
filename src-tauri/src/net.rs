@@ -133,32 +133,39 @@ fn build_client(host: &str, addrs: &[SocketAddr]) -> Result<reqwest::Client, Str
         .map_err(|_| "无法创建 HTTP 客户端".to_string())
 }
 
-static CLIENTS: Lazy<Mutex<HashMap<String, Arc<reqwest::Client>>>> =
-    Lazy::new(|| Mutex::new(HashMap::new()));
+const CLIENT_TTL: Duration = Duration::from_secs(30);
+type ClientCache = HashMap<String, (Instant, Arc<reqwest::Client>)>;
+static CLIENTS: Lazy<Mutex<ClientCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-/// 每次连接前解析并检查全部 DNS 结果，再把该批地址固定给 reqwest，避免二次解析重绑定。
-/// 用户配置的系统/显式代理仍可位于 loopback；代理是用户信任的传输层，而不是请求目标。
+fn cached_client(cache: &ClientCache, key: &str, now: Instant) -> Option<Arc<reqwest::Client>> {
+    cache.get(key).filter(|(expires, _)| now < *expires).map(|(_, http)| http.clone())
+}
+
+/// 缓存按模式、主机和端口隔离；有效期内仅复用已经检查并固定地址的客户端。
+/// 到期后重新检查全部 DNS 答案，不使用旧连接绕过新的目标检查。
 async fn client_for(raw: &str) -> Result<(url::Url, Arc<reqwest::Client>), String> {
     let strict = network_policy::strict_security();
     let target = network_policy::parse_target_with_mode(raw, strict)?;
-    let addrs = if strict {
-        network_policy::resolve_target(&target).await?
-    } else {
-        Vec::new()
-    };
     let host = target.host_str().ok_or("目标缺少主机名")?;
-    let key = format!("{strict}:{host}:{addrs:?}");
-    let mut cache = CLIENTS.lock().map_err(|_| "HTTP 客户端锁失败")?;
-    let http = if let Some(hit) = cache.get(&key) {
-        hit.clone()
-    } else {
-        let http = Arc::new(build_client(host, &addrs)?);
-        if cache.len() >= 64 {
-            cache.clear();
+    let port = target.port_or_known_default().ok_or("目标端口无效")?;
+    let key = format!("{strict}:{host}:{port}");
+    {
+        let cache = CLIENTS.lock().map_err(|_| "HTTP 客户端锁失败")?;
+        if let Some(http) = cached_client(&cache, &key, Instant::now()) {
+            return Ok((target, http));
         }
-        cache.insert(key, http.clone());
-        http
-    };
+    }
+    let addrs = if strict { network_policy::resolve_target(&target, strict).await? } else { Vec::new() };
+    let http = Arc::new(build_client(host, &addrs)?);
+    let now = Instant::now();
+    let mut cache = CLIENTS.lock().map_err(|_| "HTTP 客户端锁失败")?;
+    // 同时到达的请求可能已完成解析；不延长已有结果的有效期。
+    let http = cached_client(&cache, &key, now).unwrap_or(http);
+    if !cache.get(&key).is_some_and(|(expires, _)| now < *expires) {
+        cache.retain(|_, (expires, _)| now < *expires);
+        if cache.len() >= 64 { cache.clear(); }
+        cache.insert(key, (now + CLIENT_TTL, http.clone()));
+    }
     Ok((target, http))
 }
 
@@ -484,6 +491,18 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinned_clients_expire_without_extending_the_dns_ttl() {
+        let now = Instant::now();
+        let client = Arc::new(reqwest::Client::new());
+        let mut cache = ClientCache::new();
+        cache.insert("true:example.com:443".into(), (now + CLIENT_TTL, client.clone()));
+        assert!(Arc::ptr_eq(&cached_client(&cache, "true:example.com:443", now + Duration::from_secs(29)).unwrap(), &client));
+        assert!(cached_client(&cache, "true:example.com:443", now + CLIENT_TTL).is_none());
+        assert!(cached_client(&cache, "false:example.com:443", now).is_none());
+        assert!(cached_client(&cache, "true:example.com:8443", now).is_none());
+    }
 
     #[test]
     fn edge_redirects_only_replay_anonymous_reads() {

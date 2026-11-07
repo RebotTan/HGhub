@@ -162,6 +162,7 @@ fn check_ip(ip: IpAddr) -> Result<(), String> {
     }
 }
 
+#[cfg(test)]
 pub fn check_addresses(addrs: &[SocketAddr]) -> Result<(), String> {
     check_addresses_with_mode(addrs, strict_security())
 }
@@ -179,7 +180,7 @@ pub fn check_addresses_with_mode(addrs: &[SocketAddr], strict: bool) -> Result<(
     Ok(())
 }
 
-pub async fn resolve_target(url: &Url) -> Result<Vec<SocketAddr>, String> {
+pub async fn resolve_target(url: &Url, strict: bool) -> Result<Vec<SocketAddr>, String> {
     let port = url.port_or_known_default().ok_or("目标端口无效")?;
     let mut addrs = match url.host().ok_or("目标缺少主机名")? {
         Host::Ipv4(ip) => vec![SocketAddr::new(ip.into(), port)],
@@ -195,7 +196,7 @@ pub async fn resolve_target(url: &Url) -> Result<Vec<SocketAddr>, String> {
     };
     addrs.sort_unstable();
     addrs.dedup();
-    check_addresses(&addrs)?;
+    check_addresses_with_mode(&addrs, strict)?;
     Ok(addrs)
 }
 
