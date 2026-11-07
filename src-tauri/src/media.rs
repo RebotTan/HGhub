@@ -150,18 +150,31 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
         return Ok(hit);
     }
     let (_, bytes) = fetch_bytes(url).await?;
-    let text = String::from_utf8_lossy(&bytes).to_string();
+    let text = std::str::from_utf8(&bytes).map_err(|_| "播放列表不是 UTF-8 文本")?;
+    if !text.trim_start_matches('\u{feff}').starts_with("#EXTM3U") {
+        return Err("响应不是 HLS 播放列表".into());
+    }
+    let arc = Arc::new(rewrite_playlist(url, text, prefix));
+    cache_put(&PL_CACHE, url.to_string(), arc.clone(), PL_CACHE_MAX);
+    Ok(arc)
+}
 
+fn rewrite_playlist(url: &str, text: &str, prefix: &str) -> String {
     let mut out = String::with_capacity(text.len() + 512);
-    for raw in text.lines() {
+    for raw in text.trim_start_matches('\u{feff}').lines() {
         let line = raw.trim_end();
         if line.is_empty() {
             out.push('\n');
             continue;
         }
         if line.starts_with('#') {
-            if line.starts_with("#EXT-X-KEY") || line.starts_with("#EXT-X-MAP") {
-                // 先把相对 URI 绝对化再改写
+            // 这些可选元数据可从 JSON 或插播资源再派生 URL，不能直接交给原生播放器。
+            if line.starts_with("#EXT-X-CONTENT-STEERING:") || line.starts_with("#EXT-X-DATERANGE:")
+            {
+                continue;
+            }
+            if line.contains("URI=\"") {
+                // KEY/MAP/MEDIA/SESSION-KEY/PART/PRELOAD-HINT 等 URI 都必须经过目标检查。
                 let absolute = absolutize_uri_in_attr(url, line);
                 out.push_str(&rewrite_uri_attr(&absolute, prefix));
             } else {
@@ -174,9 +187,7 @@ pub async fn load_playlist(url: &str, prefix: &str) -> Result<Arc<String>, Strin
         out.push('\n');
     }
 
-    let arc = Arc::new(out);
-    cache_put(&PL_CACHE, url.to_string(), arc.clone(), PL_CACHE_MAX);
-    Ok(arc)
+    out
 }
 
 fn absolutize_uri_in_attr(base: &str, line: &str) -> String {
@@ -193,25 +204,58 @@ fn absolutize_uri_in_attr(base: &str, line: &str) -> String {
 
 /// 清空封面 / 播放列表内存缓存
 pub fn clear_caches() {
-    if let Ok(mut g) = IMG_CACHE.lock() { g.clear(); }
-    if let Ok(mut g) = PL_CACHE.lock() { g.clear(); }
+    if let Ok(mut g) = IMG_CACHE.lock() {
+        g.clear();
+    }
+    if let Ok(mut g) = PL_CACHE.lock() {
+        g.clear();
+    }
 }
 
 /* ───────────────────────── 协议响应 ───────────────────────── */
 
-fn respond(
-    status: u16,
-    ctype: &str,
-    body: Vec<u8>,
-    cache: &str,
-) -> Response<Vec<u8>> {
+fn respond(status: u16, ctype: &str, body: Vec<u8>, cache: &str) -> Response<Vec<u8>> {
     Response::builder()
         .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK))
         .header("Content-Type", ctype)
-        .header("Access-Control-Allow-Origin", "*")
+        .header("X-Content-Type-Options", "nosniff")
         .header("Cache-Control", cache)
         .body(body)
         .unwrap_or_else(|_| Response::new(Vec::new()))
+}
+
+/// 主清单的子清单也经 /seg 返回：必须继续改写，不能把内层 URL 原样交给播放器。
+fn segment_response(
+    target: &str,
+    ctype: Option<&str>,
+    bytes: Vec<u8>,
+    origin: &str,
+) -> Response<Vec<u8>> {
+    let playlist = ctype.is_some_and(|t| t.to_ascii_lowercase().contains("mpegurl"))
+        || bytes.starts_with(b"#EXTM3U")
+        || bytes.starts_with(b"\xef\xbb\xbf#EXTM3U");
+    if playlist {
+        return match std::str::from_utf8(&bytes) {
+            Ok(text) => respond(
+                200,
+                "application/vnd.apple.mpegurl",
+                rewrite_playlist(target, text, origin).into_bytes(),
+                "no-store",
+            ),
+            Err(_) => respond(
+                502,
+                "text/plain",
+                b"invalid playlist encoding".to_vec(),
+                "no-store",
+            ),
+        };
+    }
+    respond(
+        200,
+        ctype.unwrap_or("application/octet-stream"),
+        bytes,
+        "public, max-age=3600",
+    )
 }
 
 /// 统一入口：`<LOCAL_ORIGIN>/img?u=` / `hls?u=` / `seg?u=`
@@ -231,7 +275,9 @@ pub async fn handle(path: &str, query: &str, origin: &str) -> Response<Vec<u8>> 
 
     match path {
         "/img" => match load_image(&target).await {
-            Ok((kind, bytes)) => respond(200, &kind, bytes.as_ref().clone(), "public, max-age=86400"),
+            Ok((kind, bytes)) => {
+                respond(200, &kind, bytes.as_ref().clone(), "public, max-age=86400")
+            }
             Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
         },
         "/hls" => match load_playlist(&target, origin).await {
@@ -244,12 +290,7 @@ pub async fn handle(path: &str, query: &str, origin: &str) -> Response<Vec<u8>> 
             Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
         },
         "/seg" => match fetch_bytes(&target).await {
-            Ok((ctype, bytes)) => respond(
-                200,
-                ctype.as_deref().unwrap_or("application/octet-stream"),
-                bytes,
-                "public, max-age=3600",
-            ),
+            Ok((ctype, bytes)) => segment_response(&target, ctype.as_deref(), bytes, origin),
             Err(e) => respond(502, "text/plain", e.into_bytes(), "no-store"),
         },
         _ => respond(404, "text/plain", b"not found".to_vec(), "no-store"),
@@ -260,25 +301,71 @@ pub async fn handle(path: &str, query: &str, origin: &str) -> Response<Vec<u8>> 
 mod tests {
     use super::*;
 
+    #[test]
+    fn nested_playlists_and_alternate_uris_stay_behind_proxy() {
+        let text = "#EXTM3U\n#EXT-X-MEDIA:TYPE=AUDIO,URI=\"audio/list.m3u8\"\n#EXT-X-SESSION-KEY:METHOD=AES-128,URI=\"http://127.0.0.1/key\"\n#EXT-X-PART:DURATION=1,URI=\"part.ts\"\nvariant/list.m3u8\n";
+        let response = segment_response(
+            "https://cdn.example/master.m3u8",
+            Some("application/octet-stream"),
+            text.as_bytes().to_vec(),
+            LOCAL_ORIGIN,
+        );
+        let body = std::str::from_utf8(response.body()).unwrap();
+        assert_eq!(body.matches(&format!("{LOCAL_ORIGIN}/seg?u=")).count(), 4);
+        assert!(!body.contains("URI=\"http://127.0.0.1"));
+        assert!(body.contains("https%3A%2F%2Fcdn%2Eexample%2Faudio%2Flist%2Em3u8"));
+        assert_eq!(
+            response.headers()["Content-Type"],
+            "application/vnd.apple.mpegurl"
+        );
+        assert_eq!(response.headers()["X-Content-Type-Options"], "nosniff");
+        assert!(!response
+            .headers()
+            .contains_key("Access-Control-Allow-Origin"));
+        let optional = rewrite_playlist("https://cdn.example/list.m3u8",
+            "#EXTM3U\n#EXT-X-CONTENT-STEERING:SERVER-URI=\"https://other.example/list.json\"\n#EXT-X-DATERANGE:ID=\"ad\",X-ASSET-LIST=\"http://127.0.0.1/assets\"\nsegment.ts\n", LOCAL_ORIGIN);
+        assert!(!optional.contains("CONTENT-STEERING") && !optional.contains("DATERANGE"));
+        let bom = segment_response(
+            "https://cdn.example/list.m3u8",
+            None,
+            b"\xef\xbb\xbf#EXTM3U\nsegment.ts\n".to_vec(),
+            LOCAL_ORIGIN,
+        );
+        assert!(bom.body().starts_with(b"#EXTM3U\n"));
+    }
+
     #[tokio::test]
     async fn live_play_chain() {
         use crate::net::edge;
-        let play = edge("GET", "/api/videos/117/play?ep=3&page_texts=0", None, None).await
-            .expect("play api");
+        let play = edge(
+            &crate::net::base(),
+            "GET",
+            "/api/videos/117/play?ep=3&page_texts=0",
+            None,
+            None,
+        )
+        .await
+        .expect("play api");
         let url = play["video_url"].as_str().expect("video_url").to_string();
         println!("play url: {}", &url[..url.len().min(90)]);
         let (_, bytes) = fetch_bytes(&url).await.expect("fetch playlist");
         let text = String::from_utf8_lossy(&bytes);
-        println!("raw playlist len={} head={}", text.len(), &text[..text.len().min(160)]);
+        println!(
+            "raw playlist len={} head={}",
+            text.len(),
+            &text[..text.len().min(160)]
+        );
         let q = format!("u={}", enc(&url));
         let resp = handle("/hls", &q, LOCAL_ORIGIN).await;
         let body = String::from_utf8_lossy(resp.body()).to_string();
         println!("proxied status={} len={}", resp.status(), body.len());
         assert!(body.contains("#EXTM3U"));
         // 取一个分片验证
-        let seg_line = body.lines()
+        let seg_line = body
+            .lines()
             .find(|l| !l.starts_with('#') && l.contains("/seg?u="))
-            .expect("seg line").to_string();
+            .expect("seg line")
+            .to_string();
         println!("seg line: {}", &seg_line[..seg_line.len().min(120)]);
         let seg_q = seg_line.split("?u=").nth(1).unwrap();
         let seg = handle("/seg", &format!("u={seg_q}"), LOCAL_ORIGIN).await;
@@ -296,7 +383,10 @@ mod tests {
         println!("status={} len={}", resp.status(), body.len());
         println!("--- head ---\n{}", &body[..body.len().min(600)]);
         assert!(body.contains("#EXTM3U"), "not a playlist: {body}");
-        assert!(body.contains("hg.localhost/seg?u="), "segments not rewritten");
+        assert!(
+            body.contains("hg.localhost/seg?u="),
+            "segments not rewritten"
+        );
     }
 
     #[tokio::test]

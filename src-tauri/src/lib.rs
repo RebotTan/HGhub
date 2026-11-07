@@ -2,10 +2,23 @@ mod api;
 mod lines;
 mod media;
 mod net;
+mod network_policy;
 mod session;
 
 use api::Api;
 use tauri::Manager;
+
+fn allowed_frontend_origin(origin: &str) -> bool {
+    if matches!(
+        origin,
+        "tauri://localhost" | "http://tauri.localhost" | "https://tauri.localhost"
+    ) {
+        return true;
+    }
+    // 移动端开发可能使用 TAURI_DEV_HOST，发布版不允许这些来源。
+    cfg!(debug_assertions)
+        && url::Url::parse(origin).is_ok_and(|u| u.scheme() == "http" && u.port() == Some(1420))
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,7 +34,32 @@ pub fn run() {
             }
             Ok(())
         })
+        .plugin(
+            tauri::plugin::Builder::<_, ()>::new("navigation-guard")
+                .on_navigation(|_webview, url| {
+                    (url.scheme() == "tauri" && url.host_str() == Some("localhost"))
+                        || allowed_frontend_origin(&url.origin().ascii_serialization())
+                })
+                .build(),
+        )
         .register_asynchronous_uri_scheme_protocol("hg", |_app, request, responder| {
+            let request_origin = request
+                .headers()
+                .get("Origin")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            if request_origin
+                .as_deref()
+                .is_some_and(|origin| !allowed_frontend_origin(origin))
+            {
+                responder.respond(
+                    tauri::http::Response::builder()
+                        .status(403)
+                        .body(b"origin denied".to_vec())
+                        .unwrap(),
+                );
+                return;
+            }
             let uri = request.uri().clone();
             let path = uri.path().to_string();
             let query = uri.query().unwrap_or("").to_string();
@@ -29,7 +67,15 @@ pub fn run() {
             // http://hg.localhost），它同时是 m3u8 分片/key 改写用的前缀，
             // 必须与前端 src/api.ts 的 LOCAL 一致。
             tauri::async_runtime::spawn(async move {
-                let resp = media::handle(&path, &query, media::LOCAL_ORIGIN).await;
+                let mut resp = media::handle(&path, &query, media::LOCAL_ORIGIN).await;
+                if let Some(origin) =
+                    request_origin.and_then(|s| tauri::http::HeaderValue::from_str(&s).ok())
+                {
+                    resp.headers_mut()
+                        .insert("Access-Control-Allow-Origin", origin);
+                    resp.headers_mut()
+                        .insert("Vary", tauri::http::HeaderValue::from_static("Origin"));
+                }
                 responder.respond(resp);
             });
         })

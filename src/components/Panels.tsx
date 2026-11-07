@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, fmt } from "../api";
+import { api, fmt, cover as imageCover } from "../api";
 import type { Comment, CommentPage, Episode } from "../types";
 import { useStore } from "../store";
 import { Avatar, Empty } from "./ui";
@@ -167,7 +167,7 @@ export function ArticlePanel({ title, html, cover, hot, onClose }: {
         </button>
       </div>
       <div className="flex-1 scroll-y px-4 pb-6">
-        {cover && <img src={cover} alt="" className="w-full rounded-(--r-md) mb-3 object-cover" />}
+        {cover && <img src={imageCover(cover)} alt="" className="w-full rounded-(--r-md) mb-3 object-cover" />}
         <h2 className="text-[16px] font-bold text-on leading-snug">{title}</h2>
         <div className="article-body mt-3" dangerouslySetInnerHTML={{ __html: html }} />
         {!html && <p className="text-[12px] text-dim mt-4">这篇内容没有正文，可能只有图片或视频。</p>}
