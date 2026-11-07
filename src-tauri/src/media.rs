@@ -131,17 +131,40 @@ fn absolutize(base: &str, target: &str) -> String {
     target.to_string()
 }
 
-fn rewrite_uri_attr(line: &str, prefix: &str) -> String {
-    // #EXT-X-KEY:...URI="xxx" / #EXT-X-MAP:URI="xxx"
-    if let Some(start) = line.find("URI=\"") {
-        let rest = &line[start + 5..];
-        if let Some(end) = rest.find('"') {
-            let uri = &rest[..end];
-            let new = format!("{prefix}/seg?u={}", enc(uri));
-            return format!("{}{}{}", &line[..start + 5], new, &rest[end..]);
+/// 属性列表中的引号内可含逗号，不能直接 split(',')。
+fn hls_attributes(line: &str) -> Option<(&str, Vec<&str>)> {
+    let (tag, rest) = line.split_once(':')?;
+    let mut attributes = Vec::new();
+    let mut quoted = false;
+    let mut start = 0;
+    for (i, ch) in rest.char_indices() {
+        if ch == '"' { quoted = !quoted; }
+        if ch == ',' && !quoted {
+            attributes.push(&rest[start..i]);
+            start = i + 1;
         }
     }
-    line.to_string()
+    attributes.push(&rest[start..]);
+    Some((tag, attributes))
+}
+
+fn map_uri_attributes(line: &str, mut rewrite: impl FnMut(&str) -> String) -> String {
+    let Some((tag, attributes)) = hls_attributes(line) else { return line.to_string(); };
+    let mapped: Vec<String> = attributes.into_iter().map(|attribute| {
+        if let Some((key, value)) = attribute.split_once('=') {
+            if key.trim() == "URI" {
+                if let Some(uri) = value.trim().strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+                    return format!("{key}=\"{}\"", rewrite(uri));
+                }
+            }
+        }
+        attribute.to_string()
+    }).collect();
+    format!("{tag}:{}", mapped.join(","))
+}
+
+fn rewrite_uri_attr(line: &str, prefix: &str) -> String {
+    map_uri_attributes(line, |uri| format!("{prefix}/seg?u={}", enc(uri)))
 }
 
 /// 取 m3u8 并把 key / 分片地址改写到本地协议。
@@ -191,15 +214,7 @@ fn rewrite_playlist(url: &str, text: &str, prefix: &str) -> String {
 }
 
 fn absolutize_uri_in_attr(base: &str, line: &str) -> String {
-    if let Some(start) = line.find("URI=\"") {
-        let rest = &line[start + 5..];
-        if let Some(end) = rest.find('"') {
-            let uri = &rest[..end];
-            let abs = absolutize(base, uri);
-            return format!("{}{}{}", &line[..start + 5], abs, &rest[end..]);
-        }
-    }
-    line.to_string()
+    map_uri_attributes(line, |uri| absolutize(base, uri))
 }
 
 /// 清空封面 / 播放列表内存缓存
@@ -300,6 +315,16 @@ pub async fn handle(path: &str, query: &str, origin: &str) -> Response<Vec<u8>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_uri_attribute_is_rewritten_without_splitting_quoted_commas() {
+        let line = "#EXT-X-MEDIA:NAME=\"audio,main\",URI=\"first.m3u8\",URI=\"second.m3u8\"";
+        let absolute = absolutize_uri_in_attr("https://cdn.example/master.m3u8", line);
+        let rewritten = rewrite_uri_attr(&absolute, LOCAL_ORIGIN);
+        assert_eq!(rewritten.matches(&format!("{LOCAL_ORIGIN}/seg?u=")).count(), 2);
+        assert!(rewritten.contains("NAME=\"audio,main\""));
+        assert!(!rewritten.contains("URI=\"https://"));
+    }
 
     #[test]
     fn nested_playlists_and_alternate_uris_stay_behind_proxy() {
