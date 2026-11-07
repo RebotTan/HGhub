@@ -280,6 +280,20 @@ pub fn err_text(e: &reqwest::Error) -> String {
     out
 }
 
+fn dns_summary(addrs: impl IntoIterator<Item = SocketAddr>) -> Value {
+    let mut ips: Vec<_> = addrs.into_iter().map(|addr| addr.ip()).collect();
+    ips.sort_unstable();
+    ips.dedup();
+    let has_fake_ip = ips.iter().any(|ip| {
+        let v4 = match ip {
+            std::net::IpAddr::V4(v4) => Some(*v4),
+            std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped(),
+        };
+        v4.is_some_and(|ip| { let [a, b, _, _] = ip.octets(); a == 198 && (b == 18 || b == 19) })
+    });
+    json!({ "count": ips.len(), "has_fake_ip": has_fake_ip })
+}
+
 /// 网络自检：DNS / HTTP / 代理相关环境变量，用于远程定位「打不开」。
 pub async fn diagnose() -> Value {
     let cur = base();
@@ -294,8 +308,8 @@ pub async fn diagnose() -> Value {
         tokio::task::spawn_blocking(move || {
             use std::net::ToSocketAddrs;
             match (host.as_str(), 443u16).to_socket_addrs() {
-                Ok(iter) => json!(iter.map(|a| a.ip().to_string()).collect::<Vec<_>>()),
-                Err(e) => json!(format!("解析失败: {e}")),
+                Ok(iter) => dns_summary(iter),
+                Err(_) => json!({ "error": "DNS 解析失败" }),
             }
         })
         .await
@@ -491,6 +505,16 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_diagnostics_only_expose_counts_and_fake_ip_presence() {
+        let addrs: Vec<SocketAddr> = ["10.0.0.1:443", "198.18.0.2:443", "[::ffff:198.18.0.3]:443"].into_iter().map(|raw| raw.parse().unwrap()).collect();
+        let summary = dns_summary(addrs);
+        assert_eq!(summary, json!({"count": 3, "has_fake_ip": true}));
+        assert!(!summary.to_string().contains("10.0.0.1"));
+        assert!(!summary.to_string().contains("198.18"));
+        assert_eq!(dns_summary(Vec::<SocketAddr>::new()), json!({"count":0,"has_fake_ip":false}));
+    }
 
     #[test]
     fn pinned_clients_expire_without_extending_the_dns_ttl() {
