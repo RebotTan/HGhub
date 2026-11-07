@@ -345,6 +345,14 @@ where
     Err(last)
 }
 
+/// 仅无请求体、无凭据的逻辑 GET 可以迁移网关；信封本身仍使用 POST。
+fn edge_redirect_target(current: &url::Url, status: u16, location: &str, guest_get: bool) -> Result<url::Url, String> {
+    if !guest_get || !matches!(status, 301 | 302 | 303) {
+        return Err("业务接口重定向已拒绝".into());
+    }
+    network_policy::redirect_target(current, location)
+}
+
 /// 业务请求：走边缘信封。
 pub async fn edge(
     origin: &str,
@@ -382,15 +390,18 @@ pub async fn edge(
     let referer = format!("{cur}/");
     let token = token.map(|s| s.to_string());
 
+    let guest_get = method.eq_ignore_ascii_case("GET") && body.is_none() && token.is_none();
     let value = with_retry(|| {
         let envelope = envelope.clone();
         let token = token.clone();
         let url = url.clone();
         let referer = referer.clone();
         async move {
-            let (target, client) = client_for(&url).await?;
+            let mut next = network_policy::parse_target(&url)?;
+            for hop in 0..=5 {
+            let (target, client) = client_for(next.as_str()).await?;
             let mut req = client
-                .post(target)
+                .post(target.clone())
                 .header("Accept", "application/json")
                 .header("Referer", &referer)
                 .json(&envelope);
@@ -401,9 +412,13 @@ pub async fn edge(
             }
             let resp = req.send().await.map_err(|e| err_text(&e))?;
             let status = resp.status();
-            // 包含密码或 token 的请求绝不跟随重定向（包括 307/308 重新发送请求体）。
+            // 逐跳重建并检查客户端；不自动把信封 POST 改成无信封 GET。
             if status.is_redirection() {
-                return Err("业务接口重定向已拒绝".into());
+                if hop == 5 { return Err("重定向次数超过限制".into()); }
+                let location = resp.headers().get(reqwest::header::LOCATION)
+                    .and_then(|h| h.to_str().ok()).ok_or("重定向缺少有效 Location")?;
+                next = edge_redirect_target(&target, status.as_u16(), location, guest_get)?;
+                continue;
             }
             let text = resp.text().await.map_err(|e| err_text(&e))?;
             if status.as_u16() == 401 || status.as_u16() == 403 {
@@ -418,8 +433,10 @@ pub async fn edge(
             if text.trim().is_empty() {
                 return Ok(Value::Null);
             }
-            serde_json::from_str::<Value>(&text)
-                .map_err(|e| format!("{e}: {}", text.chars().take(160).collect::<String>()))
+            return serde_json::from_str::<Value>(&text)
+                .map_err(|e| format!("{e}: {}", text.chars().take(160).collect::<String>()));
+            }
+            Err("重定向次数超过限制".into())
         }
     })
     .await?;
@@ -467,6 +484,19 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edge_redirects_only_replay_anonymous_reads() {
+        let current = url::Url::parse("https://huangguoai.ai/api/edge/request").unwrap();
+        assert_eq!(edge_redirect_target(&current, 301, "https://huangguoai.com/api/edge/request", true).unwrap().host_str(), Some("huangguoai.com"));
+        assert!(edge_redirect_target(&current, 302, "/next", true).is_ok());
+        for status in [301, 302, 303, 307, 308] {
+            assert!(edge_redirect_target(&current, status, "/next", false).is_err());
+        }
+        for status in [307, 308] { assert!(edge_redirect_target(&current, status, "/next", true).is_err()); }
+        assert!(edge_redirect_target(&current, 301, "http://example.com/", true).is_err());
+        assert!(edge_redirect_target(&current, 301, "https://127.0.0.1/", true).is_err());
+    }
 
     #[test]
     fn proxy_credentials_and_query_are_redacted() {
