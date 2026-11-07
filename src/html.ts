@@ -3,17 +3,8 @@ import DOMPurify from "dompurify";
 
 /** 站点根地址：正文里的相对路径要补全 */
 const SITE = "https://huangguoai.com";
-const STRICT_LS = "hghub_strict_security";
-
-function readStrictSecurity(): boolean {
-  try {
-    return localStorage.getItem(STRICT_LS) !== "0";
-  } catch {
-    return true;
-  }
-}
-
-let strictSecurity = readStrictSecurity();
+// 启动前默认严格；有效状态只由 Rust app_boot / security_set 返回值更新。
+let strictSecurity = true;
 
 /** 当前是否启用严格安全模式（默认开启）。 */
 export function isStrictSecurity(): boolean {
@@ -23,9 +14,7 @@ export function isStrictSecurity(): boolean {
 /** 切换严格安全模式（关闭后回退为兼容清洗与链接策略）。 */
 export function setStrictSecurity(strict: boolean): void {
   strictSecurity = strict;
-  try {
-    localStorage.setItem(STRICT_LS, strict ? "1" : "0");
-  } catch { /* ignore */ }
+
 }
 
 function isInternalWebviewHost(host: string): boolean {

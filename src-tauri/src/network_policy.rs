@@ -69,11 +69,15 @@ pub fn bind_security(dir: &Path) {
 }
 
 /// 切换严格安全模式并落盘。
-pub fn set_strict_security(strict: bool) {
+pub fn set_strict_security(strict: bool) -> Result<(), String> {
+    let file = SECURITY_FILE.write().map_err(|_| "安全设置锁失败")?;
+    let path = file.as_ref().ok_or("安全设置尚未初始化")?;
+    let temp = path.with_extension("json.tmp");
+    std::fs::write(&temp, json!({ "strict": strict }).to_string())
+        .and_then(|_| std::fs::rename(&temp, path))
+        .map_err(|_| "无法保存安全设置，请检查应用数据目录")?;
     STRICT.store(strict, Ordering::Relaxed);
-    if let Some(path) = SECURITY_FILE.read().ok().and_then(|p| p.clone()) {
-        let _ = std::fs::write(path, json!({ "strict": strict }).to_string());
-    }
+    Ok(())
 }
 
 fn is_internal_webview_host(name: &str) -> bool {
@@ -220,6 +224,28 @@ pub fn redirect_target_with_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_security_save_keeps_the_effective_mode() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir =
+            std::env::temp_dir().join(format!("hghub-security-{}-{unique}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("security.json");
+        let previous = SECURITY_FILE.write().unwrap().replace(path.clone());
+        let before = strict_security();
+        set_strict_security(before).unwrap();
+        let saved: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(saved["strict"], before);
+        *SECURITY_FILE.write().unwrap() = Some(dir.join("missing/security.json"));
+        assert!(set_strict_security(!before).is_err());
+        assert_eq!(strict_security(), before);
+        *SECURITY_FILE.write().unwrap() = previous;
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn public_and_fakeip_are_allowed() {

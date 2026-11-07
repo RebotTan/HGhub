@@ -200,7 +200,7 @@ pub async fn app_boot(state: State<'_, Api>) -> Result<Value, String> {
 /// 切换严格安全模式（关闭后回退到兼容清洗与网络守卫模式，立即生效并落盘）。
 #[tauri::command]
 pub async fn security_set(strict: bool) -> Result<bool, String> {
-    crate::network_policy::set_strict_security(strict);
+    crate::network_policy::set_strict_security(strict)?;
     crate::net::refresh_client();
     Ok(crate::network_policy::strict_security())
 }
