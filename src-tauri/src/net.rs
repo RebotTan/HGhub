@@ -138,7 +138,10 @@ type ClientCache = HashMap<String, (Instant, Arc<reqwest::Client>)>;
 static CLIENTS: Lazy<Mutex<ClientCache>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn cached_client(cache: &ClientCache, key: &str, now: Instant) -> Option<Arc<reqwest::Client>> {
-    cache.get(key).filter(|(expires, _)| now < *expires).map(|(_, http)| http.clone())
+    cache
+        .get(key)
+        .filter(|(expires, _)| now < *expires)
+        .map(|(_, http)| http.clone())
 }
 
 /// 缓存按模式、主机和端口隔离；有效期内仅复用已经检查并固定地址的客户端。
@@ -155,7 +158,11 @@ async fn client_for(raw: &str) -> Result<(url::Url, Arc<reqwest::Client>), Strin
             return Ok((target, http));
         }
     }
-    let addrs = if strict { network_policy::resolve_target(&target, strict).await? } else { Vec::new() };
+    let addrs = if strict {
+        network_policy::resolve_target(&target, strict).await?
+    } else {
+        Vec::new()
+    };
     let http = Arc::new(build_client(host, &addrs)?);
     let now = Instant::now();
     let mut cache = CLIENTS.lock().map_err(|_| "HTTP 客户端锁失败")?;
@@ -163,7 +170,9 @@ async fn client_for(raw: &str) -> Result<(url::Url, Arc<reqwest::Client>), Strin
     let http = cached_client(&cache, &key, now).unwrap_or(http);
     if !cache.get(&key).is_some_and(|(expires, _)| now < *expires) {
         cache.retain(|_, (expires, _)| now < *expires);
-        if cache.len() >= 64 { cache.clear(); }
+        if cache.len() >= 64 {
+            cache.clear();
+        }
         cache.insert(key, (now + CLIENT_TTL, http.clone()));
     }
     Ok((target, http))
@@ -289,7 +298,10 @@ fn dns_summary(addrs: impl IntoIterator<Item = SocketAddr>) -> Value {
             std::net::IpAddr::V4(v4) => Some(*v4),
             std::net::IpAddr::V6(v6) => v6.to_ipv4_mapped(),
         };
-        v4.is_some_and(|ip| { let [a, b, _, _] = ip.octets(); a == 198 && (b == 18 || b == 19) })
+        v4.is_some_and(|ip| {
+            let [a, b, _, _] = ip.octets();
+            a == 198 && (b == 18 || b == 19)
+        })
     });
     json!({ "count": ips.len(), "has_fake_ip": has_fake_ip })
 }
@@ -345,19 +357,20 @@ pub async fn diagnose() -> Value {
 
 /// 站点偶发 TLS 抖动（实测），统一重试；碰上代理隧道错误就先重建客户端再试
 /// （代理软件开关后旧客户端会一直卡在 tunnel error 上）。
-async fn with_retry<F, Fut, T>(mut f: F) -> Result<T, String>
+async fn with_retry<F, Fut, T>(retry: bool, mut f: F) -> Result<T, String>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<T, String>>,
 {
     let mut last = String::from("network error");
-    for attempt in 0..3 {
+    let attempts = if retry { 3 } else { 1 };
+    for attempt in 0..attempts {
         match f().await {
             Ok(v) => return Ok(v),
             Err(e) => {
                 last = e;
                 heal_client(&last);
-                if attempt < 2 {
+                if attempt + 1 < attempts {
                     tokio::time::sleep(Duration::from_millis(350 * (attempt as u64 + 1))).await;
                 }
             }
@@ -367,7 +380,12 @@ where
 }
 
 /// 仅无请求体、无凭据的逻辑 GET 可以迁移网关；信封本身仍使用 POST。
-fn edge_redirect_target(current: &url::Url, status: u16, location: &str, guest_get: bool) -> Result<url::Url, String> {
+fn edge_redirect_target(
+    current: &url::Url,
+    status: u16,
+    location: &str,
+    guest_get: bool,
+) -> Result<url::Url, String> {
     if !guest_get || !matches!(status, 301 | 302 | 303) {
         return Err("业务接口重定向已拒绝".into());
     }
@@ -412,7 +430,7 @@ pub async fn edge(
     let token = token.map(|s| s.to_string());
 
     let guest_get = method.eq_ignore_ascii_case("GET") && body.is_none() && token.is_none();
-    let value = with_retry(|| {
+    let value = with_retry(method.eq_ignore_ascii_case("GET") && body.is_none(), || {
         let envelope = envelope.clone();
         let token = token.clone();
         let url = url.clone();
@@ -420,42 +438,47 @@ pub async fn edge(
         async move {
             let mut next = network_policy::parse_target(&url)?;
             for hop in 0..=5 {
-            let (target, client) = client_for(next.as_str()).await?;
-            let mut req = client
-                .post(target.clone())
-                .header("Accept", "application/json")
-                .header("Referer", &referer)
-                .json(&envelope);
-            if let Some(t) = token.as_deref() {
-                if !t.is_empty() {
-                    req = req.header("Authorization", format!("Bearer {t}"));
+                let (target, client) = client_for(next.as_str()).await?;
+                let mut req = client
+                    .post(target.clone())
+                    .header("Accept", "application/json")
+                    .header("Referer", &referer)
+                    .json(&envelope);
+                if let Some(t) = token.as_deref() {
+                    if !t.is_empty() {
+                        req = req.header("Authorization", format!("Bearer {t}"));
+                    }
                 }
-            }
-            let resp = req.send().await.map_err(|e| err_text(&e))?;
-            let status = resp.status();
-            // 逐跳重建并检查客户端；不自动把信封 POST 改成无信封 GET。
-            if status.is_redirection() {
-                if hop == 5 { return Err("重定向次数超过限制".into()); }
-                let location = resp.headers().get(reqwest::header::LOCATION)
-                    .and_then(|h| h.to_str().ok()).ok_or("重定向缺少有效 Location")?;
-                next = edge_redirect_target(&target, status.as_u16(), location, guest_get)?;
-                continue;
-            }
-            let text = resp.text().await.map_err(|e| err_text(&e))?;
-            if status.as_u16() == 401 || status.as_u16() == 403 {
-                return Err("401".to_string());
-            }
-            if !status.is_success() {
-                return Err(format!(
-                    "HTTP {status}: {}",
-                    text.chars().take(160).collect::<String>()
-                ));
-            }
-            if text.trim().is_empty() {
-                return Ok(Value::Null);
-            }
-            return serde_json::from_str::<Value>(&text)
-                .map_err(|e| format!("{e}: {}", text.chars().take(160).collect::<String>()));
+                let resp = req.send().await.map_err(|e| err_text(&e))?;
+                let status = resp.status();
+                // 逐跳重建并检查客户端；不自动把信封 POST 改成无信封 GET。
+                if status.is_redirection() {
+                    if hop == 5 {
+                        return Err("重定向次数超过限制".into());
+                    }
+                    let location = resp
+                        .headers()
+                        .get(reqwest::header::LOCATION)
+                        .and_then(|h| h.to_str().ok())
+                        .ok_or("重定向缺少有效 Location")?;
+                    next = edge_redirect_target(&target, status.as_u16(), location, guest_get)?;
+                    continue;
+                }
+                let text = resp.text().await.map_err(|e| err_text(&e))?;
+                if status.as_u16() == 401 || status.as_u16() == 403 {
+                    return Err("401".to_string());
+                }
+                if !status.is_success() {
+                    return Err(format!(
+                        "HTTP {status}: {}",
+                        text.chars().take(160).collect::<String>()
+                    ));
+                }
+                if text.trim().is_empty() {
+                    return Ok(Value::Null);
+                }
+                return serde_json::from_str::<Value>(&text)
+                    .map_err(|e| format!("{e}: {}", text.chars().take(160).collect::<String>()));
             }
             Err("重定向次数超过限制".into())
         }
@@ -482,7 +505,7 @@ pub async fn edge(
 pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String> {
     let url = url.to_string();
     let referer = format!("{}/", base());
-    with_retry(|| {
+    with_retry(true, || {
         let url = url.clone();
         let referer = referer.clone();
         async move {
@@ -506,14 +529,35 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn non_idempotent_operations_are_attempted_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for (retry, expected) in [(false, 1), (true, 3)] {
+            let calls = AtomicUsize::new(0);
+            let result = with_retry(retry, || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err::<(), _>("rejected".to_string())
+            })
+            .await;
+            assert!(result.is_err());
+            assert_eq!(calls.load(Ordering::SeqCst), expected);
+        }
+    }
+
     #[test]
     fn dns_diagnostics_only_expose_counts_and_fake_ip_presence() {
-        let addrs: Vec<SocketAddr> = ["10.0.0.1:443", "198.18.0.2:443", "[::ffff:198.18.0.3]:443"].into_iter().map(|raw| raw.parse().unwrap()).collect();
+        let addrs: Vec<SocketAddr> = ["10.0.0.1:443", "198.18.0.2:443", "[::ffff:198.18.0.3]:443"]
+            .into_iter()
+            .map(|raw| raw.parse().unwrap())
+            .collect();
         let summary = dns_summary(addrs);
         assert_eq!(summary, json!({"count": 3, "has_fake_ip": true}));
         assert!(!summary.to_string().contains("10.0.0.1"));
         assert!(!summary.to_string().contains("198.18"));
-        assert_eq!(dns_summary(Vec::<SocketAddr>::new()), json!({"count":0,"has_fake_ip":false}));
+        assert_eq!(
+            dns_summary(Vec::<SocketAddr>::new()),
+            json!({"count":0,"has_fake_ip":false})
+        );
     }
 
     #[test]
@@ -521,8 +565,19 @@ mod tests {
         let now = Instant::now();
         let client = Arc::new(reqwest::Client::new());
         let mut cache = ClientCache::new();
-        cache.insert("true:example.com:443".into(), (now + CLIENT_TTL, client.clone()));
-        assert!(Arc::ptr_eq(&cached_client(&cache, "true:example.com:443", now + Duration::from_secs(29)).unwrap(), &client));
+        cache.insert(
+            "true:example.com:443".into(),
+            (now + CLIENT_TTL, client.clone()),
+        );
+        assert!(Arc::ptr_eq(
+            &cached_client(
+                &cache,
+                "true:example.com:443",
+                now + Duration::from_secs(29)
+            )
+            .unwrap(),
+            &client
+        ));
         assert!(cached_client(&cache, "true:example.com:443", now + CLIENT_TTL).is_none());
         assert!(cached_client(&cache, "false:example.com:443", now).is_none());
         assert!(cached_client(&cache, "true:example.com:8443", now).is_none());
@@ -531,12 +586,24 @@ mod tests {
     #[test]
     fn edge_redirects_only_replay_anonymous_reads() {
         let current = url::Url::parse("https://huangguoai.ai/api/edge/request").unwrap();
-        assert_eq!(edge_redirect_target(&current, 301, "https://huangguoai.com/api/edge/request", true).unwrap().host_str(), Some("huangguoai.com"));
+        assert_eq!(
+            edge_redirect_target(
+                &current,
+                301,
+                "https://huangguoai.com/api/edge/request",
+                true
+            )
+            .unwrap()
+            .host_str(),
+            Some("huangguoai.com")
+        );
         assert!(edge_redirect_target(&current, 302, "/next", true).is_ok());
         for status in [301, 302, 303, 307, 308] {
             assert!(edge_redirect_target(&current, status, "/next", false).is_err());
         }
-        for status in [307, 308] { assert!(edge_redirect_target(&current, status, "/next", true).is_err()); }
+        for status in [307, 308] {
+            assert!(edge_redirect_target(&current, status, "/next", true).is_err());
+        }
         assert!(edge_redirect_target(&current, 301, "http://example.com/", true).is_err());
         assert!(edge_redirect_target(&current, 301, "https://127.0.0.1/", true).is_err());
     }
