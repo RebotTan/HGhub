@@ -43,6 +43,10 @@ cargo test --locked --manifest-path src-tauri/Cargo.toml --lib -- \
 
 2026-11-07 本地复测：Linux 上前端生产构建、回归测试 TypeScript 检查及 `cargo check --locked` 通过；Rust 本地测试 16 项通过、0 失败（跳过上述 6 项联网测试）。独立 Chromium 分别模拟 Windows、macOS 用户代理，验证 `http://hg.localhost` 与 `hg://localhost` 两套图片协议分支，每套 29 项全部通过；这不等同于原生 Windows/macOS WebView 实测。复测修复了最终 URL 规则误删链接 `target`/`rel` 和 macOS 代理图片重复清洗丢失的问题。Linux 编译库仅下载、解包到 `/tmp` 使用，未安装到系统。
 
+2026-11-07 原生补测：系统 GTK/WebKit 依赖安装完成后，构建嵌入生产前端资源的 Tauri 2 调试程序，在 Linux WebKitGTK 2.52.6 中通过 WebDriver 验证。使用独立数据目录，12 次启动均完整关闭原生进程后再启动，116 项检查通过，覆盖默认启动静音、手动开声后连续重启、关闭/重新开启偏好、音量记忆、操作后立即关闭，以及普通视频和文章视频共享静音状态。媒体使用本地 WAV 替身，业务内容接口使用测试数据；设置状态、WebKit 磁盘存储和窗口关闭 IPC 均来自真实客户端。已有正文安全回归在原生 WebView 中 29 项全部通过；这仍不等同于 Windows/macOS/Android 实机或真实上游播放链路验证。
+
+同次重跑全部 Rust 测试，未跳过任何项目：19 项通过、3 项失败。`mirrors_live` 与 `live_play_chain` 因当前 DNS 将目标解析为普通私网地址而被严格策略拒绝；`playlist_rewrite_works` 使用的旧地址返回 HTTP 403。此前跳过的封面解密、线路探测和网络诊断测试完成运行，其中探测/诊断测试通过仅代表返回结果可生成，不代表上游可达。未因此放宽内网访问限制。
+
 本次仅处理审查编号 1、3、5、8；Windows `cmd /C start` 外链打开方式、媒体/日志容量上限和 token 明文存储仍需另行处理。网络错误文本的 UTF-8 截断在改动网络入口时一并改为安全截断。
 
 参考：[DOMPurify](https://github.com/cure53/DOMPurify)、[Tauri CSP](https://v2.tauri.app/security/csp/)、[reqwest DNS 地址固定接口](https://docs.rs/reqwest/0.12.28/reqwest/struct.ClientBuilder.html#method.resolve_to_addrs)。

@@ -3,12 +3,12 @@ import { api, APP_VERSION, hostOf, logLine, type UpdateInfo } from "../api";
 import { useStore } from "../store";
 import { Modal, Toggle } from "../components/ui";
 import LinePicker from "../components/LinePicker";
-import { IBack, IBoltF, IBroom, IChevR, IHeart, IInfo, ILink, ILockF, IMoon, IRefresh, ISettings, ISun } from "../icons";
+import { IBack, IBoltF, IBroom, IChevR, IHeart, IInfo, ILink, ILockF, IMoon, IRefresh, ISettings, ISun, IVolMute } from "../icons";
 
-/* 独立设置页：线路 / 外观 / 本地数据 / 清理缓存 / 网络诊断 / 关于
+/* 独立设置页：线路 / 外观 / 播放 / 本地数据 / 清理缓存 / 网络诊断 / 关于
    入口：Windows 侧栏「设置」、Android「我的」右上角齿轮 */
 export default function Settings({ onBack, wide }: { onBack: () => void; wide: boolean }) {
-  const { theme, setTheme, favs, history, strictSecurity, cliRelaxed, setStrictSecurity, toast } = useStore();
+  const { theme, setTheme, favs, history, muteOnStartup, setMuteOnStartup, strictSecurity, cliRelaxed, setStrictSecurity, toast } = useStore();
   const [about, setAbout] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -54,7 +54,7 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
                 <span className="w-9 h-9 rounded-(--r-sm) bg-pc text-on-pc flex items-center justify-center"><ISettings size={20} strokeWidth={1.7} /></span>
                 <span className="text-[24px] font-bold tracking-wide text-on">设置</span>
               </div>
-              <div className="text-[11px] text-mut mt-1">外观 · 本地数据 · 诊断</div>
+              <div className="text-[11px] text-mut mt-1">外观 · 播放 · 本地数据 · 诊断</div>
             </div>
           </div>
         </div>
@@ -70,6 +70,17 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
                 <div className="text-[10.5px] text-mut">跟随设计稿的 Fluent 深色</div>
               </div>
               <Toggle on={theme === "dark"} onChange={(on) => setTheme(on ? "dark" : "light")} label="深色外观" />
+            </div>
+          </Section>
+
+          <Section title="播放">
+            <div className="flex items-center gap-3 px-3.5 py-3">
+              <span className="w-8 h-8 rounded-full bg-s3 flex items-center justify-center text-primary"><IVolMute size={16} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12.5px] text-on">启动时静音</div>
+                <div className="text-[10.5px] text-mut">默认开启，每次启动均静音；关闭后记住上次静音状态。下次启动生效。</div>
+              </div>
+              <Toggle on={muteOnStartup} onChange={setMuteOnStartup} label="启动时静音" />
             </div>
           </Section>
 
