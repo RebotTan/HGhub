@@ -297,6 +297,18 @@ mod tests {
     }
 
     #[test]
+    fn reserved_ipv6_subranges_are_covered_by_the_existing_block() {
+        for raw in [
+            "2001:2::1",
+            "2001:2:ffff:ffff:ffff:ffff:ffff:ffff",
+            "2001:10::1",
+            "2001:1f:ffff:ffff:ffff:ffff:ffff:ffff",
+        ] {
+            assert!(!allowed_ip(raw.parse().unwrap()), "{raw}");
+        }
+    }
+
+    #[test]
     fn alternate_spellings_and_unsafe_urls_are_blocked() {
         for raw in [
             "http://127.1/",
