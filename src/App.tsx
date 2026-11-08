@@ -12,6 +12,7 @@ import Feed from "./components/Feed";
 import { PostsPage, PostDetail } from "./pages/Posts";
 import LoginModal from "./components/LoginModal";
 import { ToastHost } from "./components/ui";
+import { tracePlayback } from "./playbackDiagnostics";
 import { IGrid, IGridF, IHome, IHomeF, ISearch, IUser, IUserF, Logo } from "./icons";
 
 /* ============ 底部标签栏（Android）—— 细瘦纯文字、低侵入 ============ */
@@ -73,7 +74,7 @@ function StackPage({ page, onBack, wide, top, bottomInset }: {
   if (page.kind === "ranks") return <RankPage onBack={onBack} wide={wide} />;
   if (page.kind === "settings") return <SettingsPage onBack={onBack} wide={wide} />;
   if (page.kind === "posts") return <PostsPage onBack={onBack} wide={wide} />;
-  if (page.kind === "post") return <PostDetail id={page.id} onBack={onBack} />;
+  if (page.kind === "post") return <PostDetail id={page.id} onBack={onBack} active={top} />;
   return null;
 }
 
@@ -155,6 +156,9 @@ function MobileShell() {
 /* ============ 入口 ============ */
 export default function App() {
   const { loginOpen, setLoginOpen, tab, setTab, stack, pop, fs, setFs } = useStore();
+  useEffect(() => {
+    tracePlayback("navigation.change", { tab, stack: stack.map(p => ({ page: p.kind, key: p.key })), login_open: loginOpen });
+  }, [tab, stack, loginOpen]);
 
   /* —— 安卓硬件返回键 ——
      层级：全屏 → 面板/弹层 → 登录框 → 页面栈 → 回首页 → 退出应用。

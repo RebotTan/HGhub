@@ -3,6 +3,7 @@ import { api, APP_VERSION, hostOf, logLine, type UpdateInfo } from "../api";
 import { useStore } from "../store";
 import { Modal, Toggle } from "../components/ui";
 import LinePicker from "../components/LinePicker";
+import { copyPlaybackLog, initPlaybackLog, setPlaybackLog, usePlaybackLog } from "../playbackDiagnostics";
 import { IBack, IBoltF, IBroom, IChevR, IHeart, IInfo, ILink, ILockF, IMoon, IRefresh, ISettings, ISun, IVolMute } from "../icons";
 
 /* 独立设置页：线路 / 外观 / 播放 / 本地数据 / 清理缓存 / 网络诊断 / 关于
@@ -16,11 +17,14 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
   const [lineBase, setLineBase] = useState("");
   const [checking, setChecking] = useState(false);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const playbackLog = usePlaybackLog();
+  const [copyingLog, setCopyingLog] = useState(false);
 
   const readLine = () => {
     api.lineState().then((s) => setLineBase(s.base)).catch(() => {});
   };
   useEffect(readLine, []);
+  useEffect(() => { void initPlaybackLog(); }, []);
 
   const checkUpdate = async () => {
     setChecking(true);
@@ -147,6 +151,32 @@ export default function Settings({ onBack, wide }: { onBack: () => void; wide: b
               <div className="flex-1">
                 <div className="text-[12.5px] text-on">网络诊断</div>
                 <div className="text-[10.5px] text-mut">检测 DNS / 系统代理 / 官网连通性</div>
+              </div>
+              <IChevR size={15} className="text-mut" />
+            </button>
+          </Section>
+
+          <Section title="播放诊断">
+            <div className="flex items-center gap-3 px-3.5 py-3">
+              <span className="w-8 h-8 rounded-full bg-s3 flex items-center justify-center text-primary"><IInfo size={16} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12.5px] text-on">播放诊断日志</div>
+                <div className="text-[10.5px] text-mut">记录点击、拖动、切页和缓冲过程；复现问题后可关闭并复制日志</div>
+                {playbackLog.error && <div role="alert" className="text-[10.5px] text-danger">{playbackLog.error}</div>}
+              </div>
+              <Toggle label="播放诊断日志" on={playbackLog.enabled} disabled={!playbackLog.ready || playbackLog.pending}
+                onChange={(on) => { void setPlaybackLog(on).then(() => toast(on ? "已开启播放诊断，请复现问题" : "已关闭播放诊断，已有日志保留", "ok")).catch(() => toast("日志设置保存失败，请重试", "info")); }} />
+            </div>
+            <button disabled={!playbackLog.ready || playbackLog.pending || copyingLog} onClick={async () => {
+              setCopyingLog(true);
+              try { await copyPlaybackLog(); toast("播放诊断日志已复制", "ok"); }
+              catch (e) { toast((e as Error).message || "复制日志失败", "info"); }
+              finally { setCopyingLog(false); }
+            }} className="w-full flex items-center gap-3 px-3.5 py-3 text-left pressable disabled:opacity-60">
+              <span className="w-8 h-8 rounded-full bg-s3 flex items-center justify-center text-primary"><ILink size={16} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12.5px] text-on">{copyingLog ? "正在复制…" : "复制播放诊断日志"}</div>
+                <div className="text-[10.5px] text-mut break-all">{playbackLog.path || "日志仅保存在本机"}</div>
               </div>
               <IChevR size={15} className="text-mut" />
             </button>

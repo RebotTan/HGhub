@@ -3,6 +3,7 @@ mod lines;
 mod media;
 mod net;
 mod network_policy;
+mod playback_log;
 mod session;
 
 use api::Api;
@@ -48,6 +49,7 @@ pub fn run() {
                 let _ = std::fs::create_dir_all(&dir);
                 // 上次选择的线路（设置 → 线路）在启动时恢复
                 net::bind_base(&dir);
+                playback_log::bind(&dir);
                 let state: tauri::State<Api> = app.state();
                 state.session.bind(dir);
             }
@@ -69,11 +71,22 @@ pub fn run() {
                 .get("Origin")
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
+            if playback_log::enabled() {
+                let resource = url::form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
+                    .find(|(key, _)| key == "u")
+                    .map(|(_, value)| playback_log::resource_id(&value));
+                let route = match request.uri().path() { "/hls" => "playlist", "/seg" => "segment_or_key", "/img" => "image", _ => "unknown" };
+                let range = request.headers().get("Range").and_then(|v| v.to_str().ok())
+                    .filter(|v| v.len() <= 100 && v.bytes().all(|b| b.is_ascii_digit() || b"bytes=,- ".contains(&b)));
+                let origin_kind = match request_origin.as_deref() { None => "missing", Some("null") => "null", Some(origin) if allowed_frontend_origin(origin) => "app", _ => "other" };
+                playback_log::record("protocol.request", serde_json::json!({"resource": resource, "route": route, "method": request.method().as_str(), "range": range, "origin_kind": origin_kind}));
+            }
             if network_policy::strict_security()
                 && request_origin
                     .as_deref()
                     .is_some_and(|origin| !allowed_frontend_origin(origin))
             {
+                playback_log::record("security.origin_denied", serde_json::json!({"origin_null": request_origin.as_deref() == Some("null")}));
                 responder.respond(
                     tauri::http::Response::builder()
                         .status(403)
@@ -103,6 +116,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             api::app_boot,
+            playback_log::playback_log_status,
+            playback_log::playback_log_set,
+            playback_log::playback_log_write,
+            playback_log::playback_log_read,
             api::security_set,
             api::debug_log,
             api::net_diag,

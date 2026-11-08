@@ -192,9 +192,15 @@ pub async fn get(
     referer: Option<&str>,
 ) -> Result<reqwest::Response, String> {
     tokio::time::timeout(timeout, async {
-        let mut next = network_policy::parse_target(raw)?;
+        let policy_error = |phase: &str, error: String| {
+            crate::playback_log::record("network.target_failed", json!({"resource": crate::playback_log::resource_id(raw), "phase": phase, "error_kind": crate::playback_log::error_kind(&error)}));
+            error
+        };
+        let mut next = network_policy::parse_target(raw).map_err(|e| policy_error("parse", e))?;
         for hop in 0..=5 {
-            let (target, http) = client_for(next.as_str()).await?;
+            let resolving = Instant::now();
+            let (target, http) = client_for(next.as_str()).await.map_err(|e| policy_error("dns_or_client", e))?;
+            crate::playback_log::record("network.target_ready", json!({"resource": crate::playback_log::resource_id(raw), "target_resource": crate::playback_log::resource_id(target.as_str()), "dns_or_client_ms": resolving.elapsed().as_millis() as u64, "hop": hop}));
             let mut request = http.get(target.clone()).timeout(timeout);
             if let Some(value) = accept {
                 request = request.header("Accept", value);
@@ -214,7 +220,8 @@ pub async fn get(
                 .get(reqwest::header::LOCATION)
                 .and_then(|h| h.to_str().ok())
                 .ok_or("重定向缺少有效 Location")?;
-            next = network_policy::redirect_target(&target, location)?;
+            next = network_policy::redirect_target(&target, location).map_err(|e| policy_error("redirect", e))?;
+            crate::playback_log::record("network.redirect", json!({"resource": crate::playback_log::resource_id(raw), "from": crate::playback_log::resource_id(target.as_str()), "to": crate::playback_log::resource_id(next.as_str()), "status": response.status().as_u16(), "hop": hop + 1}));
         }
         Err("重定向次数超过限制".into())
     })
@@ -503,23 +510,40 @@ pub async fn edge(
 
 /// 拉原始字节（图片 / m3u8 / 分片）。
 pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String> {
+    static NEXT_REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let request = NEXT_REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let resource = crate::playback_log::resource_id(url);
+    let mut attempt = 0;
     let url = url.to_string();
     let referer = format!("{}/", base());
     with_retry(true, || {
+        attempt += 1;
+        let attempt = attempt;
+        let resource = resource.clone();
         let url = url.clone();
         let referer = referer.clone();
         async move {
-            let resp = get(&url, Duration::from_secs(20), None, Some(&referer)).await?;
-            if !resp.status().is_success() {
-                return Err(format!("HTTP {}", resp.status()));
-            }
-            let ctype = resp
-                .headers()
-                .get(reqwest::header::CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-            let bytes = resp.bytes().await.map_err(|e| err_text(&e))?.to_vec();
-            Ok((ctype, bytes))
+            let started = Instant::now();
+            crate::playback_log::record("network.begin", json!({"request": request, "resource": resource, "attempt": attempt}));
+            let mut status = None;
+            let mut headers_ms = None;
+            let result = async {
+                let resp = get(&url, Duration::from_secs(20), None, Some(&referer)).await?;
+                status = Some(resp.status().as_u16());
+                headers_ms = Some(started.elapsed().as_millis() as u64);
+                if !resp.status().is_success() {
+                    return Err(format!("HTTP {}", resp.status()));
+                }
+                let ctype = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.to_string());
+                let bytes = resp.bytes().await.map_err(|e| err_text(&e))?.to_vec();
+                Ok((ctype, bytes))
+            }.await;
+            crate::playback_log::record("network.end", json!({"request": request, "resource": resource, "attempt": attempt, "status": status, "headers_ms": headers_ms, "elapsed_ms": started.elapsed().as_millis() as u64, "bytes": result.as_ref().ok().map(|(_, bytes)| bytes.len()), "error_kind": result.as_ref().err().map(|e: &String| crate::playback_log::error_kind(e))}));
+            result
         }
     })
     .await

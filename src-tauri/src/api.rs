@@ -202,6 +202,10 @@ pub async fn app_boot(state: State<'_, Api>) -> Result<Value, String> {
 pub async fn security_set(strict: bool) -> Result<bool, String> {
     crate::network_policy::set_strict_security(strict)?;
     crate::net::refresh_client();
+    crate::playback_log::record(
+        "security.mode_changed",
+        json!({"strict": crate::network_policy::strict_security()}),
+    );
     Ok(crate::network_policy::strict_security())
 }
 

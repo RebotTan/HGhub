@@ -1,13 +1,15 @@
 import { useEffect, useImperativeHandle, useRef, forwardRef, useState } from "react";
 import Hls from "hls.js";
 import { isLocalMedia, playlist } from "../api";
+import { mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 
 export type VideoHandle = {
   el: () => HTMLVideoElement | null;
   play: () => void;
   pause: () => void;
   toggle: () => void;
-  seek: (t: number) => void;
+  seek: (t: number, source?: string) => void;
+  trace: (event: string, data?: Record<string, unknown>) => void;
   rate: (r: number) => void;
   mute: (m: boolean) => void;
   volume: (v: number) => void;
@@ -17,6 +19,7 @@ type Props = {
   src: string;
   poster?: string;
   autoPlay?: boolean;
+  diagnosticContext?: Record<string, unknown>;
   muted?: boolean;
   loop?: boolean;
   fit?: "contain" | "cover";
@@ -37,24 +40,38 @@ type Props = {
 
 /** 只负责「播」：hls.js + video 元素，控制条由外层渲染。 */
 const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
-  { src, poster, autoPlay = true, muted = false, loop = false, fit = "contain", volume = 1, rate = 1,
+  { src, poster, autoPlay = true, diagnosticContext = {}, muted = false, loop = false, fit = "contain", volume = 1, rate = 1,
     onTime, onDuration, onSize, onPlaying, onPause, onWaiting, onEnded, onError, onClick, className = "" },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const [ready, setReady] = useState(false);
+  const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { ...diagnosticContext, resource: mediaResource(src) });
+  const play = (source: string) => {
+    trace("play.request", { source });
+    videoRef.current?.play().catch(e => trace("play.rejected", { source, error_name: e?.name }));
+  };
 
   useImperativeHandle(ref, () => ({
     el: () => videoRef.current,
-    play: () => { videoRef.current?.play().catch(() => {}); },
-    pause: () => videoRef.current?.pause(),
+    play: () => play("handle"),
+    pause: () => { trace("pause.request", { source: "handle" }); videoRef.current?.pause(); },
     toggle: () => {
       const v = videoRef.current;
       if (!v) return;
-      if (v.paused) v.play().catch(() => {}); else v.pause();
+      trace("toggle.request");
+      if (v.paused) play("toggle"); else v.pause();
     },
-    seek: (t: number) => { const v = videoRef.current; if (v && Number.isFinite(t)) v.currentTime = t; },
+    seek: (t: number, source = "handle") => {
+      const v = videoRef.current;
+      if (v && Number.isFinite(t)) {
+        requestSeek(t, source);
+        try { v.currentTime = t; trace("seek.assigned", { target: t, source }); }
+        catch (e) { trace("seek.rejected", { error_name: (e as Error).name }); throw e; }
+      }
+    },
+    trace,
     rate: (r: number) => { const v = videoRef.current; if (v) v.playbackRate = r; },
     mute: (m: boolean) => { const v = videoRef.current; if (v) v.muted = m; },
     volume: (vol: number) => { const v = videoRef.current; if (v) v.volume = vol; },
@@ -69,6 +86,7 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
     const proxied = isLocalMedia(src);
     const url = proxied ? src : playlist(src);
     const useHls = !url.includes("/seg?u=");
+    trace("source.load", { engine: useHls && Hls.isSupported() ? "hls.js" : "native", auto_play: autoPlay, resource: mediaResource(src) });
 
     /* 换源时先把音量/倍速套回去：hls 重新 attach 后浏览器会把它们重置成默认值 */
     const applySettings = () => {
@@ -94,10 +112,11 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
         fragLoadingMaxRetry: 4,
       });
       hlsRef.current = hls;
+      observeHls(hls, trace);
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (autoPlay) video.play().catch(() => {});
+        if (autoPlay) play("manifest_autoplay");
       });
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (!data.fatal) return;
@@ -108,10 +127,11 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       });
     } else {
       video.src = url;
-      if (autoPlay) video.play().catch(() => {});
+      if (autoPlay) play("native_autoplay");
     }
 
     return () => {
+      trace("source.cleanup");
       if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

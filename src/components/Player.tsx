@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import { fmtTime, playlist } from "../api";
+import { mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 import { ICompress, IExpand, IPauseF, IPlayF, IVol, IVolMute } from "../icons";
 
 type Props = {
@@ -15,15 +16,18 @@ type Props = {
   onToggleMute?: () => void;
   controls?: boolean;
   className?: string;
+  diagnosticContext?: Record<string, unknown>;
 };
 
 export default function Player({
   src, poster, autoPlay, muted = false, loop = false, onEnded, onPlaying,
-  onTogglePlay, onToggleMute, controls = true, className = "",
+  onTogglePlay, onToggleMute, controls = true, className = "", diagnosticContext = {},
 }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { view: "post_detail", ...diagnosticContext, resource: mediaResource(src) });
+  const seekPointer = useRef<{ x: number; moved: boolean } | null>(null);
   const [playing, setPlaying] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const [time, setTime] = useState(0);
@@ -36,6 +40,7 @@ export default function Player({
     const video = videoRef.current;
     if (!video || !src) return;
     const url = playlist(src);
+    trace("source.load", { engine: Hls.isSupported() ? "hls.js" : "native", auto_play: autoPlay });
 
     if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
 
@@ -54,10 +59,14 @@ export default function Player({
         fragLoadingMaxRetry: 4,
       });
       hlsRef.current = hls;
+      observeHls(hls, trace);
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (autoPlay) video.play().catch(() => setPlaying(false));
+        if (autoPlay) {
+          trace("play.request", { source: "manifest_autoplay" });
+          video.play().catch(e => { trace("play.rejected", { error_name: e?.name }); setPlaying(false); });
+        }
       });
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (!data.fatal) return;
@@ -71,10 +80,14 @@ export default function Player({
     } else {
       // Safari / 部分 WebView 原生支持 HLS
       video.src = url;
-      if (autoPlay) video.play().catch(() => setPlaying(false));
+      if (autoPlay) {
+        trace("play.request", { source: "native_autoplay" });
+        video.play().catch(e => { trace("play.rejected", { error_name: e?.name }); setPlaying(false); });
+      }
     }
 
     return () => {
+      trace("source.cleanup");
       if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
     };
   }, [src, autoPlay]);
@@ -94,7 +107,8 @@ export default function Player({
   const toggle = () => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) video.play().catch(() => {});
+    trace("toggle.request");
+    if (video.paused) video.play().catch(e => trace("play.rejected", { error_name: e?.name }));
     else video.pause();
   };
 
@@ -102,7 +116,11 @@ export default function Player({
     const video = videoRef.current;
     if (!video || !duration) return;
     const pct = Number(e.target.value) / 1000;
+    const input = seekPointer.current ? (seekPointer.current.moved ? "drag" : "click") : "keyboard";
+    trace("seek.input.change", { input, target: pct * duration });
+    requestSeek(pct * duration, `legacy_${input}`);
     video.currentTime = pct * duration;
+    trace("seek.assigned", { target: pct * duration });
     setTime(video.currentTime);
   };
 
@@ -165,7 +183,16 @@ export default function Player({
 
       {controls && (
         <div className="absolute inset-x-0 bottom-0 px-3 pb-2 pt-8 bg-gradient-to-t from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
-          <input type="range" min={0} max={1000} value={Math.round(pct * 10)} onChange={onSeek}
+          <input aria-label="播放进度" type="range" min={0} max={1000} value={Math.round(pct * 10)} onChange={onSeek}
+            onPointerDown={(e) => {
+              seekPointer.current = { x: e.clientX, moved: false };
+              const rect = e.currentTarget.getBoundingClientRect();
+              trace("seek.input.down", { input: "pointer", pointer_target: rect.width ? Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * duration : undefined });
+            }}
+            onPointerMove={(e) => { if (seekPointer.current && Math.abs(e.clientX - seekPointer.current.x) > 3) seekPointer.current.moved = true; }}
+            onPointerUp={() => { trace("seek.input.up", { input: seekPointer.current?.moved ? "drag" : "click" }); seekPointer.current = null; }}
+            onPointerCancel={() => { trace("seek.input.cancel"); seekPointer.current = null; }}
+            onBlur={() => { seekPointer.current = null; }}
             className="hg-range w-full" style={{ "--fill": `${pct}%` } as React.CSSProperties} />
           <div className="flex items-center gap-3 mt-1 text-white">
             <button onClick={toggle} aria-label={playing ? "暂停" : "播放"} className="pressable">

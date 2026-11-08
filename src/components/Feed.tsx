@@ -84,6 +84,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const curEp = epMap[curId] || 1;
   const playKey = `${curId}:${curEp}`;
   const playUrl = playUrls[playKey] || "";
+  useEffect(() => { videoRef.current?.trace("page.active", { active, view: mode, video_id: curId, episode: curEp }); }, [active, mode, curId, curEp]);
   const episodes = detail?.episodes || [];
   const post = posts[curId];
 
@@ -105,7 +106,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     const r = resumeRef.current;
     if (r && r.key === playKey && r.t > 1 && (!d || r.t < d - 3)) {
       resumeRef.current = null;
-      videoRef.current?.seek(r.t);
+      videoRef.current?.seek(r.t, "history_resume");
       setTime(r.t);
     }
   };
@@ -258,8 +259,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         case "ArrowDown": e.preventDefault(); go(1); break;
         case "ArrowUp": e.preventDefault(); go(-1); break;
         case " ": e.preventDefault(); videoRef.current?.toggle(); break;
-        case "ArrowLeft": e.preventDefault(); videoRef.current?.seek(Math.max(0, time - 5)); break;
-        case "ArrowRight": e.preventDefault(); videoRef.current?.seek(time + 5); break;
+        case "ArrowLeft": e.preventDefault(); videoRef.current?.seek(Math.max(0, time - 5), "keyboard_shortcut"); break;
+        case "ArrowRight": e.preventDefault(); videoRef.current?.seek(time + 5, "keyboard_shortcut"); break;
         case "f": case "F": toggleFull(); break;
         case "m": case "M": setMuted((v) => !v); break;
         case "l": case "L": onLike(); break;
@@ -366,7 +367,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     }
     if (g.mode === "scrub") {
       const target = scrubTarget.current;
-      if (target != null) videoRef.current?.seek(target);
+      if (target != null) videoRef.current?.seek(target, "mobile_gesture");
       setScrub(null);
       scrubTarget.current = null;
       if (!paused) videoRef.current?.play();
@@ -402,6 +403,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   };
   const onBarDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation();
+    videoRef.current?.trace("seek.input.down", { input: "mobile_bar" });
     barScrub.current = true;
     try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch { /* ignore */ }
     barSeekTo(e.clientX, e.clientY);
@@ -409,6 +411,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const onBarMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!barScrub.current) return;
     e.stopPropagation();
+    videoRef.current?.trace("seek.input.move", { input: "mobile_bar" });
     barSeekTo(e.clientX, e.clientY);
   };
   const onBarUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -418,7 +421,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     const pct = barPctAt(e.clientX, e.clientY);
     if (pct != null && duration) {
       const target = pct * duration;
-      videoRef.current?.seek(target);
+      videoRef.current?.trace("seek.input.up", { input: "mobile_bar", target });
+      videoRef.current?.seek(target, "mobile_bar");
       setTime(target);
     }
     setBarPct(null);
@@ -481,6 +485,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                 <div className="absolute inset-0" style={{ touchAction: "pan-y" }}
                   onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
                 <VideoSurface ref={videoRef} src={playUrl} poster={posterUrl} autoPlay muted={muted}
+                  diagnosticContext={{ active, view: mode, kind, video_id: curId, episode: curEp }}
                   volume={volume} rate={effRate}
                   fit={vsize.w > 0 && vsize.w > vsize.h ? "contain" : "cover"}
                   onTime={onTimeTick}
