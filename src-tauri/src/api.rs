@@ -32,22 +32,12 @@ impl Api {
     }
 }
 
-/// 诊断用：把前端自检结果写到应用数据目录 debug.log
+/// API/运行错误与自检统一写入 debug.log，每行附 RFC 3339 UTC 时间和进程编号。
 #[tauri::command]
 pub async fn debug_log(app: tauri::AppHandle, msg: String) -> Result<(), String> {
     use tauri::Manager;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("debug.log");
-    use std::io::Write;
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        let _ = writeln!(f, "{}", msg);
-    }
-    Ok(())
+    crate::logging::append_debug(&dir, &msg)
 }
 
 /// 网络自检：系统代理 / DNS / 连通性快照，用于远程定位「打不开」。

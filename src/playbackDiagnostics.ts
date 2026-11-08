@@ -205,8 +205,10 @@ export function observeHls(hls: Hls, trace: (event: string, data?: Data) => void
     hls.on(event, (_event: string, data: FragLoadingData | FragLoadedData | FragBufferedData) => {
       if (!playbackLogEnabled()) return;
       const { frag } = data;
+      const loading = frag.stats.loading;
       trace(event, { resource: mediaResource(frag.url), fragment: frag.sn, start: round(frag.start), duration: round(frag.duration), bytes: frag.stats.loaded,
-        load_ms: round(frag.stats.loading.end - frag.stats.loading.start), first_byte_ms: round(frag.stats.loading.first - frag.stats.loading.start) });
+        load_ms: loading.end > 0 && loading.end >= loading.start ? round(loading.end - loading.start) : null,
+        first_byte_ms: loading.first > 0 && loading.first >= loading.start ? round(loading.first - loading.start) : null });
     });
   }
   hls.on(Hls.Events.ERROR, (_event, data) => trace("hls.error", { type: data.type, detail: data.details, fatal: data.fatal, status: data.response?.code,

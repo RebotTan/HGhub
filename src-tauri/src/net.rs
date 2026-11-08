@@ -84,11 +84,21 @@ pub fn bind_base(dir: &std::path::Path) {
 pub fn set_base(url: &str) -> Result<String, String> {
     let next = normalize_base(url)
         .ok_or_else(|| "线路地址无效（需要纯 HTTPS 站点地址，禁止内网）".to_string())?;
+    let previous = base();
     if let Ok(mut cur) = BASE.write() {
         *cur = next.clone();
     }
     if let Some(path) = BASE_FILE.read().ok().and_then(|p| p.clone()) {
         let _ = std::fs::write(path, json!({ "base": next }).to_string());
+    }
+    if previous != next {
+        crate::playback_log::record(
+            "line.changed",
+            json!({
+                "previous_host": url::Url::parse(&previous).ok().and_then(|u| u.host_str().map(str::to_owned)),
+                "line_host": url::Url::parse(&next).ok().and_then(|u| u.host_str().map(str::to_owned)),
+            }),
+        );
     }
     Ok(next)
 }
@@ -362,7 +372,28 @@ pub async fn diagnose() -> Value {
     })
 }
 
-/// 站点偶发 TLS 抖动（实测），统一重试；碰上代理隧道错误就先重建客户端再试
+fn retryable_error(error: &str) -> bool {
+    if error == "401" {
+        return false;
+    }
+    if let Some(status) = error
+        .strip_prefix("HTTP ")
+        .and_then(|s| s.split_whitespace().next())
+        .and_then(|s| s.parse::<u16>().ok())
+    {
+        return matches!(status, 408 | 425 | 429 | 500..=599);
+    }
+    !matches!(
+        crate::playback_log::error_kind(error),
+        "https_downgrade_denied"
+            | "private_address_denied"
+            | "target_policy_denied"
+            | "redirect_error"
+    )
+}
+
+/// 只重试可能恢复的错误；404/权限错误/安全拒绝直接结束，避免无效等待。
+/// 站点偶发 TLS 抖动；碰上代理隧道错误就先重建客户端再试
 /// （代理软件开关后旧客户端会一直卡在 tunnel error 上）。
 async fn with_retry<F, Fut, T>(retry: bool, mut f: F) -> Result<T, String>
 where
@@ -376,6 +407,9 @@ where
             Ok(v) => return Ok(v),
             Err(e) => {
                 last = e;
+                if !retryable_error(&last) {
+                    return Err(last);
+                }
                 heal_client(&last);
                 if attempt + 1 < attempts {
                     tokio::time::sleep(Duration::from_millis(350 * (attempt as u64 + 1))).await;
@@ -384,6 +418,32 @@ where
         }
     }
     Err(last)
+}
+
+// 只记录固定的操作类型，不写搜索词、账号、内容 ID 或查询参数。
+fn edge_operation(path: &str) -> &'static str {
+    let path = path.split('?').next().unwrap_or("");
+    if path.starts_with("/api/videos/category/") {
+        "category"
+    } else if path.starts_with("/api/videos/") && path.ends_with("/play") {
+        "play"
+    } else if path == "/api/videos" {
+        "feed"
+    } else if path.starts_with("/api/videos/") {
+        "video"
+    } else if path == "/api/posts" {
+        "posts"
+    } else if path.starts_with("/api/posts/") {
+        "post"
+    } else if path.starts_with("/api/ranks/") {
+        "rank"
+    } else if path == "/api/search" {
+        "search"
+    } else if path.starts_with("/api/account/") {
+        "account"
+    } else {
+        "other"
+    }
 }
 
 /// 仅无请求体、无凭据的逻辑 GET 可以迁移网关；信封本身仍使用 POST。
@@ -436,58 +496,96 @@ pub async fn edge(
     let referer = format!("{cur}/");
     let token = token.map(|s| s.to_string());
 
+    static NEXT_EDGE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let request = NEXT_EDGE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let line_host = url::Url::parse(&cur)
+        .unwrap()
+        .host_str()
+        .unwrap()
+        .to_string();
+    let operation = edge_operation(path);
+    let mut attempt = 0;
     let guest_get = method.eq_ignore_ascii_case("GET") && body.is_none() && token.is_none();
-    let value = with_retry(method.eq_ignore_ascii_case("GET") && body.is_none(), || {
+    let can_retry = method.eq_ignore_ascii_case("GET") && body.is_none();
+    let value = with_retry(can_retry, || {
+        attempt += 1;
+        let attempt = attempt;
         let envelope = envelope.clone();
         let token = token.clone();
         let url = url.clone();
         let referer = referer.clone();
+        let line_host = line_host.clone();
         async move {
-            let mut next = network_policy::parse_target(&url)?;
-            for hop in 0..=5 {
-                let (target, client) = client_for(next.as_str()).await?;
-                let mut req = client
-                    .post(target.clone())
-                    .header("Accept", "application/json")
-                    .header("Referer", &referer)
-                    .json(&envelope);
-                if let Some(t) = token.as_deref() {
-                    if !t.is_empty() {
-                        req = req.header("Authorization", format!("Bearer {t}"));
+            let started = Instant::now();
+            crate::playback_log::record("api.begin", json!({"request": request, "attempt": attempt, "operation": operation, "method": method, "line_host": line_host}));
+            let mut status_code = None;
+            let mut headers_ms = None;
+            let mut target_host = line_host.clone();
+            let mut response_kind = "unknown";
+            let mut gateway = "other";
+            let result = async {
+                let mut next = network_policy::parse_target(&url)?;
+                for hop in 0..=5 {
+                    let (target, client) = client_for(next.as_str()).await?;
+                    target_host = target.host_str().unwrap_or("").to_string();
+                    let mut req = client
+                        .post(target.clone())
+                        .header("Accept", "application/json")
+                        .header("Referer", &referer)
+                        .json(&envelope);
+                    if let Some(t) = token.as_deref() {
+                        if !t.is_empty() {
+                            req = req.header("Authorization", format!("Bearer {t}"));
+                        }
                     }
-                }
-                let resp = req.send().await.map_err(|e| err_text(&e))?;
-                let status = resp.status();
-                // 逐跳重建并检查客户端；不自动把信封 POST 改成无信封 GET。
-                if status.is_redirection() {
-                    if hop == 5 {
-                        return Err("重定向次数超过限制".into());
+                    let resp = req.send().await.map_err(|e| err_text(&e))?;
+                    let status = resp.status();
+                    status_code = Some(status.as_u16());
+                    headers_ms = Some(started.elapsed().as_millis() as u64);
+                    let ctype = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
+                    response_kind = if ctype.contains("json") { "json" } else if ctype.contains("html") { "html" } else { "other" };
+                    gateway = if resp.headers().contains_key("x-amz-cf-id") { "cloudfront" } else if resp.headers().contains_key("cf-ray") { "cloudflare" } else { "other" };
+                    // 逐跳重建并检查客户端；不自动把信封 POST 改成无信封 GET。
+                    if status.is_redirection() {
+                        if hop == 5 {
+                            return Err("重定向次数超过限制".into());
+                        }
+                        let location = resp
+                            .headers()
+                            .get(reqwest::header::LOCATION)
+                            .and_then(|h| h.to_str().ok())
+                            .ok_or("重定向缺少有效 Location")?;
+                        next = edge_redirect_target(&target, status.as_u16(), location, guest_get)?;
+                        continue;
                     }
-                    let location = resp
-                        .headers()
-                        .get(reqwest::header::LOCATION)
-                        .and_then(|h| h.to_str().ok())
-                        .ok_or("重定向缺少有效 Location")?;
-                    next = edge_redirect_target(&target, status.as_u16(), location, guest_get)?;
-                    continue;
+                    let text = resp.text().await.map_err(|e| err_text(&e))?;
+                    if status.as_u16() == 401 || status.as_u16() == 403 {
+                        return Err("401".to_string());
+                    }
+                    if !status.is_success() {
+                        return Err(format!(
+                            "HTTP {status}: {}",
+                            text.chars().take(160).collect::<String>()
+                        ));
+                    }
+                    if text.trim().is_empty() {
+                        return Ok(Value::Null);
+                    }
+                    return serde_json::from_str::<Value>(&text)
+                        .map_err(|e| format!("{e}: {}", text.chars().take(160).collect::<String>()));
                 }
-                let text = resp.text().await.map_err(|e| err_text(&e))?;
-                if status.as_u16() == 401 || status.as_u16() == 403 {
-                    return Err("401".to_string());
-                }
-                if !status.is_success() {
-                    return Err(format!(
-                        "HTTP {status}: {}",
-                        text.chars().take(160).collect::<String>()
-                    ));
-                }
-                if text.trim().is_empty() {
-                    return Ok(Value::Null);
-                }
-                return serde_json::from_str::<Value>(&text)
-                    .map_err(|e| format!("{e}: {}", text.chars().take(160).collect::<String>()));
-            }
-            Err("重定向次数超过限制".into())
+                Err("重定向次数超过限制".into())
+            }.await;
+            crate::playback_log::record("api.end", json!({
+                "request": request, "attempt": attempt, "operation": operation, "method": method,
+                "line_host": line_host, "target_host": target_host, "status": status_code,
+                "headers_ms": headers_ms, "elapsed_ms": started.elapsed().as_millis() as u64,
+                "response_kind": response_kind, "gateway": gateway,
+                "business_status": result.as_ref().ok().and_then(|v: &Value| v.get("status")).and_then(Value::as_i64),
+                "error_kind": result.as_ref().err().map(|e: &String| crate::playback_log::error_kind(e)),
+                "retryable": can_retry && result.as_ref().err().is_some_and(|e| retryable_error(e)),
+            }));
+            result
         }
     })
     .await?;
@@ -552,6 +650,58 @@ pub async fn fetch_bytes(url: &str) -> Result<(Option<String>, Vec<u8>), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn terminal_errors_do_not_retry_but_transient_failures_can_recover() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for error in [
+            "HTTP 404 Not Found: <html>nginx</html>",
+            "HTTP 403 Forbidden",
+            "401",
+            "禁止访问内网",
+            "重定向次数超过限制",
+        ] {
+            let calls = AtomicUsize::new(0);
+            assert!(with_retry(true, || async {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Err::<(), _>(error.to_string())
+            })
+            .await
+            .is_err());
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "{error}");
+        }
+        for error in ["HTTP 503 Service Unavailable", "请求超时"] {
+            let calls = AtomicUsize::new(0);
+            let value = with_retry(true, || {
+                let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt == 0 {
+                        Err(error.to_string())
+                    } else {
+                        Ok(42)
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(value, 42);
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+        }
+    }
+
+    #[test]
+    fn api_operation_labels_exclude_user_input() {
+        for (path, expected) in [
+            ("/api/videos?page=1&size=10", "feed"),
+            ("/api/videos/category/private?x=secret", "category"),
+            ("/api/videos/42/play?ep=1", "play"),
+            ("/api/search?q=private-search", "search"),
+            ("/api/account/loginByPassword", "account"),
+            ("/unknown/private", "other"),
+        ] {
+            assert_eq!(edge_operation(path), expected);
+        }
+    }
 
     #[tokio::test]
     async fn non_idempotent_operations_are_attempted_once() {

@@ -128,9 +128,7 @@ impl Journal {
     fn append(&mut self, event: &str, data: Value, limit: u64) -> Result<(), String> {
         let dir = self.dir.as_ref().ok_or("日志目录尚未初始化")?;
         let path = dir.join("playback.log");
-        let ts = time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .map_err(|_| "日志时间格式错误")?;
+        let ts = crate::logging::utc_timestamp()?;
         let line = json!({ "ts": ts, "pid": std::process::id(), "seq": SEQ.fetch_add(1, Ordering::Relaxed), "event": event, "strict": crate::network_policy::strict_security(), "data": scrub(&data, 0) }).to_string() + "\n";
         if fs::metadata(&path).map(|m| m.len()).unwrap_or(0) + line.len() as u64 > limit {
             let previous = dir.join("playback.previous.log");

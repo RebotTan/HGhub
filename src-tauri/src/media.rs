@@ -283,7 +283,8 @@ fn segment_response(
                 200,
                 "application/vnd.apple.mpegurl",
                 rewrite_playlist(target, text, origin).into_bytes(),
-                "no-store",
+                // Rewriting nested URIs does not require disabling the upstream cache policy.
+                "public, max-age=3600",
             ),
             Err(_) => respond(
                 502,

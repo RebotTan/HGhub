@@ -35,6 +35,10 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
     const msg = typeof e === "string" ? e : "请求失败，请检查网络";
     // 落盘完整错误链（dns error / connection refused / 证书错误…），toast 只显示截断版
     logLine(`[api] ${cmd} → ${msg}`);
+    const status = /^HTTP (\d{3})\b/.exec(msg)?.[1];
+    if (status) {
+      throw new Error(`服务器请求失败（HTTP ${status}），请稍后重试或在设置中切换线路`);
+    }
     throw new Error(msg.length > 140 ? `${msg.slice(0, 140)}…` : msg);
   }
 }

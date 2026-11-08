@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, fmt } from "../api";
 import type { Post, VideoCard } from "../types";
 import { useStore } from "../store";
@@ -14,34 +14,49 @@ export const CHANNELS = [
 ] as const;
 
 /* ================= 分类总览 ================= */
-export default function Category({ wide }: { wide: boolean }) {
+export default function Category({ wide, active }: { wide: boolean; active: boolean }) {
   const { push } = useStore();
   const [rows, setRows] = useState<Record<string, VideoCard[]>>({});
   const [posts, setPosts] = useState<Post[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<Record<string, boolean>>({});
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const mounted = useRef(false);
+  const started = useRef(false);
+  const pending = useRef(new Set<string>());
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      const entries = await Promise.all(
-        CHANNELS.map(async (c) => {
-          try {
-            const res = await api.category(c.cate, 1, 8);
-            return [c.cate, res?.items || []] as const;
-          } catch {
-            return [c.cate, [] as VideoCard[]] as const;
-          }
-        }),
-      );
-      let p: Post[] = [];
-      try { p = (await api.posts(1, 8))?.items || []; } catch { p = []; }
-      if (!alive) return;
-      setRows(Object.fromEntries(entries));
-      setPosts(p);
-      setLoading(false);
-    })();
-    return () => { alive = false; };
+    mounted.current = true;
+    return () => { mounted.current = false; };
   }, []);
+
+  const loadPreview = useCallback(async (key: string) => {
+    if (pending.current.has(key)) return;
+    pending.current.add(key);
+    setLoading(m => ({ ...m, [key]: true }));
+    setErrors(m => ({ ...m, [key]: "" }));
+    try {
+      if (key === "posts") {
+        const result = await api.posts(1, 8);
+        if (mounted.current) setPosts(result?.items || []);
+      } else {
+        const result = await api.category(key, 1, 8);
+        if (mounted.current) setRows(m => ({ ...m, [key]: result?.items || [] }));
+      }
+    } catch (error) {
+      if (mounted.current) setErrors(m => ({ ...m, [key]: (error as Error).message || "加载失败" }));
+    } finally {
+      pending.current.delete(key);
+      if (mounted.current) setLoading(m => ({ ...m, [key]: false }));
+    }
+  }, []);
+
+  useEffect(() => {
+    // 首次打开分类才加载，避免启动时后台频道请求/封面与首页视频竞争网络。
+    if (!active || started.current) return;
+    started.current = true;
+    CHANNELS.forEach(c => { void loadPreview(c.cate); });
+    void loadPreview("posts");
+  }, [active, loadPreview]);
 
   return (
     <div className="absolute inset-0 bg-bg flex flex-col">
@@ -67,7 +82,7 @@ export default function Category({ wide }: { wide: boolean }) {
         {CHANNELS.map((c, ci) => {
           const list = rows[c.cate] || [];
           return (
-            <section key={c.cate} className="mb-5 a-rise" style={{ animationDelay: `${Math.min(ci * 50, 300)}ms` }}>
+            <section key={c.cate} aria-label={c.name} className="mb-5 a-rise" style={{ animationDelay: `${Math.min(ci * 50, 300)}ms` }}>
               <button onClick={() => push({ kind: "channel", cate: c.cate, name: c.name })}
                 className="w-full flex items-center gap-2.5 px-4 mb-2.5 text-left pressable group">
                 <span className="w-[36px] h-[36px] rounded-(--r-sm) tonal flex items-center justify-center shrink-0 text-primary">
@@ -85,14 +100,14 @@ export default function Category({ wide }: { wide: boolean }) {
                 {list.map((v) => (
                   <RowCard key={v.id} v={v} onOpen={() => push({ kind: "feed", videoIds: list.map((x) => x.id), index: list.findIndex((x) => x.id === v.id), title: c.name })} />
                 ))}
-                {!list.length && <div className="h-[150px] flex items-center text-[11.5px] text-dim px-1">{loading ? "加载中…" : "暂无内容"}</div>}
+                {!list.length && <PreviewStatus name={c.name} loading={loading[c.cate] !== false} error={errors[c.cate]} onRetry={() => void loadPreview(c.cate)} />}
               </div>
             </section>
           );
         })}
 
         {/* 吃瓜 */}
-        <section className="mb-5 a-rise">
+        <section aria-label="黄果吃瓜" className="mb-5 a-rise">
           <button onClick={() => push({ kind: "posts" })}
             className="w-full flex items-center gap-2.5 px-4 mb-2.5 text-left pressable group">
             <span className="w-[36px] h-[36px] rounded-(--r-sm) tonal flex items-center justify-center shrink-0 text-primary">
@@ -118,7 +133,7 @@ export default function Category({ wide }: { wide: boolean }) {
                 <div className="mt-1.5 text-[11.5px] font-medium text-on clamp-1 leading-tight">{post.title}</div>
               </button>
             ))}
-            {!posts.length && <div className="h-[150px] flex items-center text-[11.5px] text-dim px-1">{loading ? "加载中…" : "暂无内容"}</div>}
+            {!posts.length && <PreviewStatus name="黄果吃瓜" loading={loading.posts !== false} error={errors.posts} onRetry={() => void loadPreview("posts")} />}
           </div>
         </section>
 
@@ -127,6 +142,13 @@ export default function Category({ wide }: { wide: boolean }) {
       {wide && <div />}
     </div>
   );
+}
+
+function PreviewStatus({ name, loading, error, onRetry }: { name: string; loading: boolean; error?: string; onRetry: () => void }) {
+  return <div className="h-[150px] flex flex-col justify-center items-start gap-2 text-[11.5px] text-dim px-1">
+    <span>{loading ? "加载中…" : error || "暂无内容"}</span>
+    {!loading && error && <button aria-label={`重试${name}`} onClick={onRetry} className="text-primary pressable">重试</button>}
+  </div>;
 }
 
 /* ================= 频道详情页 ================= */
