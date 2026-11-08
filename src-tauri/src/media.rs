@@ -400,7 +400,10 @@ mod tests {
         assert!(bom.body().starts_with(b"#EXTM3U\n"));
     }
 
+    /// 联网测试：默认跳过，手动跑 `cargo test --lib -- --ignored`。
+    /// 依赖上游 `/api/videos/117/play` 返回的实时播放地址。
     #[tokio::test]
+    #[ignore = "联网测试：依赖上游实时播放地址，手动用 --ignored 运行"]
     async fn live_play_chain() {
         use crate::net::edge;
         let play = edge(
@@ -440,25 +443,74 @@ mod tests {
         assert!(seg.body().len() > 1000);
     }
 
-    #[tokio::test]
-    async fn playlist_rewrite_works() {
-        let m3u8 = "https://yd-lphu-hls.hzjvlo.cn/videos5/247f3c9862e8e1537ade0b20c45ac962/247f3c9862e8e1537ade0b20c45ac962.m3u8?auth_key=1793700503-0-0-b9575bb11258cf40cd5499c052fc5820&v=3&time=0&via=hgdj&via_bm=dx";
-        let q = format!("u={}", enc(m3u8));
-        let resp = handle("/hls", &q, LOCAL_ORIGIN).await;
-        let body = String::from_utf8_lossy(resp.body()).to_string();
-        println!("status={} len={}", resp.status(), body.len());
-        println!("--- head ---\n{}", &body[..body.len().min(600)]);
+    /// 离线回归：不再依赖带 auth_key 时效的真实上游地址（旧地址已过期，会 403）。
+    /// 与真实播放列表同构：带签名的分片地址 + 加密 KEY + 相对路径分片。
+    #[test]
+    fn playlist_rewrite_works() {
+        let base = "https://cdn.example/videos5/abc/abc.m3u8?auth_key=9999999999-0-0-deadbeef&v=3&via=hgdj";
+        let text = "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"key.bin?auth_key=9999999999-0-0-deadbeef\"\n#EXTINF:4,\nseg-1.ts?auth_key=9999999999-0-0-deadbeef\n";
+        let body = rewrite_playlist(base, text, LOCAL_ORIGIN);
+
         assert!(body.contains("#EXTM3U"), "not a playlist: {body}");
         assert!(
-            body.contains("hg.localhost/seg?u="),
-            "segments not rewritten"
+            body.contains(&format!("{LOCAL_ORIGIN}/seg?u=")),
+            "segments not rewritten: {body}"
         );
+        // 分片必须绝对化到源站，并保留签名查询串。
+        assert!(
+            body.contains("https%3A%2F%2Fcdn%2Eexample%2Fvideos5%2Fabc%2Fseg%2D1%2Ets%3Fauth%5Fkey%3D"),
+            "segment not absolutized with query: {body}"
+        );
+        // 加密 KEY 也要走本地代理，否则 hls.js 会直接打源站被 CORS 拦住。
+        assert!(
+            body.contains("URI=\"") && body.contains("%2Fkey%2Ebin%3Fauth%5Fkey%3D"),
+            "key uri not rewritten: {body}"
+        );
+        assert!(!body.contains("URI=\"key.bin"), "key uri left relative");
     }
 
+    /// 离线回归：用已知明文 + 项目内置 key/IV 构造密文，验证解密、去填充与类型识别。
+    /// 真实封面抓取那条仍保留为 `#[ignore]` 联网测试。
+    #[test]
+    fn cover_decrypt_roundtrip() {
+        use aes::cipher::BlockEncrypt;
+
+        let plain = b"\xFF\xD8\xFF\xE0cover-payload-for-test".to_vec();
+        let mut buf = plain.clone();
+        let pad = 16 - plain.len() % 16;
+        buf.extend(std::iter::repeat_n(pad as u8, pad));
+
+        let cipher = Aes128::new_from_slice(IMG_KEY).expect("key");
+        let mut prev = [0u8; 16];
+        prev.copy_from_slice(IMG_IV);
+        let mut encrypted = Vec::with_capacity(buf.len());
+        for chunk in buf.chunks(16) {
+            let mut block = [0u8; 16];
+            block.copy_from_slice(chunk);
+            for i in 0..16 {
+                block[i] ^= prev[i];
+            }
+            let mut out_block = block;
+            cipher.encrypt_block((&mut out_block).into());
+            encrypted.extend_from_slice(&out_block);
+            prev = out_block;
+        }
+
+        let decrypted = aes_cbc_decrypt(&encrypted).expect("decrypt");
+        let stripped = strip_padding(decrypted);
+        assert_eq!(stripped, plain);
+        assert_eq!(image_kind(&stripped), Some("image/jpeg"));
+    }
+
+    /// 联网测试：默认跳过。封面地址带时效签名，不能硬编码进仓库，
+    /// 需要用当次上游返回的地址显式传入：
+    /// `HGHUB_TEST_COVER_URL='https://…?auth_key=…' cargo test --lib -- --ignored`
     #[tokio::test]
+    #[ignore = "联网测试：需要 HGHUB_TEST_COVER_URL，手动用 --ignored 运行"]
     async fn cover_decrypt_works() {
-        let url = "https://pic.drleao.cn/upload_01/upload/20261029/2026102918545028336.jpg?auth_key=1793707703-0-0-1cbd9389b0b69141dd741f16bb71397a";
-        match load_image(url).await {
+        let url = std::env::var("HGHUB_TEST_COVER_URL")
+            .expect("需要设置 HGHUB_TEST_COVER_URL 为当前有效的封面地址");
+        match load_image(&url).await {
             Ok((kind, bytes)) => {
                 println!("kind={kind} len={}", bytes.len());
                 assert!(kind.starts_with("image/"));

@@ -680,9 +680,10 @@ mod tests {
         assert!(err.contains("禁止访问"));
     }
 
-    /// 手动跑：`cargo test --lib net::tests::diag -- --nocapture`
+    /// 手动跑：`cargo test --lib -- --ignored net::tests::diag -- --nocapture`
     /// 关掉 TUN、只留系统代理时跑一遍，能直接看出客户端有没有走代理。
     #[tokio::test]
+    #[ignore = "联网测试：请求上游做网络自检，手动用 --ignored 运行"]
     async fn diag() {
         println!(
             "{}",

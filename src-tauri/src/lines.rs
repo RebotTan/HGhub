@@ -254,8 +254,9 @@ var foreverUrls = [
         assert_eq!(script_src(html).as_deref(), Some("publish.js?20261103-2"));
     }
 
-    /// 手动跑：`cargo test --lib lines::tests::mirrors_live -- --nocapture`
+    /// 手动跑：`cargo test --lib -- --ignored lines::tests::mirrors_live -- --nocapture`
     #[tokio::test]
+    #[ignore = "联网测试：请求上游镜像列表，手动用 --ignored 运行"]
     async fn mirrors_live() {
         match mirrors().await {
             Ok(v) => println!("{}", serde_json::to_string_pretty(&v).expect("json")),
@@ -263,8 +264,9 @@ var foreverUrls = [
         }
     }
 
-    /// 手动跑：`cargo test --lib lines::tests::probe_live -- --nocapture`
+    /// 手动跑：`cargo test --lib -- --ignored lines::tests::probe_live -- --nocapture`
     #[tokio::test]
+    #[ignore = "联网测试：探测上游线路连通性，手动用 --ignored 运行"]
     async fn probe_live() {
         let urls = vec![
             "https://huangguoai.com".to_string(),
