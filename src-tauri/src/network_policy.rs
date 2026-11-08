@@ -184,6 +184,13 @@ pub fn check_addresses_with_mode(addrs: &[SocketAddr], strict: bool) -> Result<(
     Ok(())
 }
 
+/// 与浏览器一致优先 IPv6：连接器以首个地址的协议族为首选，另一族在其失败后（Happy Eyeballs）兜底。
+/// 普通排序会把 IPv4 排在前面；共享 IPv4 出口被上游接口限流时，请求会挂起或返回 502/503，
+/// 而同一网络下浏览器走 IPv6 一切正常。
+fn sort_ipv6_first(addrs: &mut [SocketAddr]) {
+    addrs.sort_unstable_by_key(|addr| (addr.is_ipv4(), *addr));
+}
+
 pub async fn resolve_target(url: &Url, strict: bool) -> Result<Vec<SocketAddr>, String> {
     let port = url.port_or_known_default().ok_or("目标端口无效")?;
     let mut addrs = match url.host().ok_or("目标缺少主机名")? {
@@ -198,7 +205,7 @@ pub async fn resolve_target(url: &Url, strict: bool) -> Result<Vec<SocketAddr>, 
         .map_err(|_| "DNS 解析失败")?
         .collect(),
     };
-    addrs.sort_unstable();
+    sort_ipv6_first(&mut addrs);
     addrs.dedup();
     check_addresses_with_mode(&addrs, strict)?;
     Ok(addrs)
@@ -245,6 +252,23 @@ mod tests {
         assert_eq!(strict_security(), before);
         *SECURITY_FILE.write().unwrap() = previous;
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn resolved_addresses_prefer_ipv6() {
+        let mut addrs: Vec<SocketAddr> = [
+            "18.65.214.45:443",
+            "[2600:9000:221c:5000:3:fdd6:fcc0:93a1]:443",
+            "18.65.214.3:443",
+            "[2600:9000:221c:4000:3:fdd6:fcc0:93a1]:443",
+        ]
+        .iter()
+        .map(|s| s.parse().unwrap())
+        .collect();
+        sort_ipv6_first(&mut addrs);
+        assert!(addrs[..2].iter().all(SocketAddr::is_ipv6), "{addrs:?}");
+        assert!(addrs[2..].iter().all(SocketAddr::is_ipv4), "{addrs:?}");
+        assert_eq!(addrs[2], "18.65.214.3:443".parse::<SocketAddr>().unwrap());
     }
 
     #[test]
