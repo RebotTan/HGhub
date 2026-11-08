@@ -2,6 +2,7 @@ import { useEffect, useImperativeHandle, useRef, forwardRef, useState } from "re
 import Hls from "hls.js";
 import { isLocalMedia, playlist } from "../api";
 import { mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
+import { usePlaybackActivity } from "../usePlaybackActivity";
 
 export type VideoHandle = {
   el: () => HTMLVideoElement | null;
@@ -19,6 +20,7 @@ type Props = {
   src: string;
   poster?: string;
   autoPlay?: boolean;
+  active?: boolean;
   diagnosticContext?: Record<string, unknown>;
   muted?: boolean;
   loop?: boolean;
@@ -40,28 +42,25 @@ type Props = {
 
 /** 只负责「播」：hls.js + video 元素，控制条由外层渲染。 */
 const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
-  { src, poster, autoPlay = true, diagnosticContext = {}, muted = false, loop = false, fit = "contain", volume = 1, rate = 1,
+  { src, poster, autoPlay = true, active = true, diagnosticContext = {}, muted = false, loop = false, fit = "contain", volume = 1, rate = 1,
     onTime, onDuration, onSize, onPlaying, onPause, onWaiting, onEnded, onError, onClick, className = "" },
   ref,
 ) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const [ready, setReady] = useState(false);
-  const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { ...diagnosticContext, resource: mediaResource(src) });
-  const play = (source: string) => {
-    trace("play.request", { source });
-    videoRef.current?.play().catch(e => trace("play.rejected", { source, error_name: e?.name }));
-  };
+  const { trace, requestSeek } = usePlayerDiagnostics(videoRef, hlsRef, { ...diagnosticContext, active, resource: mediaResource(src) });
+  const activity = usePlaybackActivity(videoRef, hlsRef, { active, autoPlay, src, trace });
 
   useImperativeHandle(ref, () => ({
     el: () => videoRef.current,
-    play: () => play("handle"),
-    pause: () => { trace("pause.request", { source: "handle" }); videoRef.current?.pause(); },
+    play: () => activity.play("handle"),
+    pause: () => activity.pause(),
     toggle: () => {
       const v = videoRef.current;
       if (!v) return;
       trace("toggle.request");
-      if (v.paused) play("toggle"); else v.pause();
+      if (v.paused) activity.play("toggle"); else activity.pause("toggle");
     },
     seek: (t: number, source = "handle") => {
       const v = videoRef.current;
@@ -105,6 +104,9 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
         contentSteeringController: undefined,
         enableInterstitialPlayback: false,
         enableWorker: true,
+        // Prefer standard MSE on macOS; hls.js handles MMS-only fallback and seek recovery.
+        preferManagedMediaSource: false,
+        autoStartLoad: false,
         maxBufferLength: 30,
         backBufferLength: 30,
         manifestLoadingTimeOut: 20000,
@@ -116,18 +118,20 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
       hls.loadSource(url);
       hls.attachMedia(video);
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        if (autoPlay) play("manifest_autoplay");
+        if (activity.isActive()) hls.startLoad();
+        if (autoPlay) activity.play("manifest_autoplay", true);
       });
       hls.on(Hls.Events.ERROR, (_e, data) => {
         if (!data.fatal) return;
         onError?.(`${data.type}/${data.details}`);
+        if (!activity.isActive()) return;
         if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
         else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
         else { hls.destroy(); hlsRef.current = null; }
       });
     } else {
       video.src = url;
-      if (autoPlay) play("native_autoplay");
+      if (autoPlay) activity.play("native_autoplay", true);
     }
 
     return () => {
@@ -165,11 +169,11 @@ const VideoSurface = forwardRef<VideoHandle, Props>(function VideoSurface(
         onDuration?.(v.duration || 0);
         onSize?.(v.videoWidth || 0, v.videoHeight || 0);
       }}
-      onPlay={() => onPlaying?.()}
+      onPlay={() => { if (activity.isActive()) onPlaying?.(); }}
       onPause={() => onPause?.()}
       onWaiting={() => onWaiting?.()}
-      onPlaying={() => onPlaying?.()}
-      onEnded={() => onEnded?.()}
+      onPlaying={() => { if (activity.isActive()) onPlaying?.(); }}
+      onEnded={() => { if (activity.isActive()) onEnded?.(); }}
     />
   );
 });
