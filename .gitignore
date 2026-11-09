@@ -7,6 +7,12 @@ dist/
 dist-ssr/
 src-tauri/target/
 src-tauri/gen/
+core/target/
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/**/*.so
 *.local
 
 # 编辑器 / 系统
