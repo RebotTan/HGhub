@@ -4,7 +4,8 @@ import { fmtTime, playlist } from "../api";
 import { mediaResource, observeHls, usePlayerDiagnostics } from "../playbackDiagnostics";
 import { usePlaybackActivity } from "../usePlaybackActivity";
 import { useSeekInput } from "../useSeekInput";
-import { ICompress, IExpand, IPauseF, IPlayF, IVol, IVolMute } from "../icons";
+import PlaybackLock from "./PlaybackLock";
+import { ICompress, IExpand, ILockF, IPauseF, IPlayF, IVol, IVolMute } from "../icons";
 
 type Props = {
   src: string;              // 原始 m3u8 地址
@@ -38,7 +39,8 @@ export default function Player({
   const [full, setFull] = useState(false);
   const [rate, setRate] = useState(1);
   const [errMsg, setErrMsg] = useState<string>("");
-  const seek = useSeekInput({ time, duration, enabled: active, resetKey: src,
+  const [controlsLocked, setControlsLocked] = useState(false);
+  const seek = useSeekInput({ time, duration, enabled: active && !controlsLocked, resetKey: src,
     onInteraction: (phase, input, target, pointerTarget) => trace(`seek.input.${phase}`, { input, target, pointer_target: pointerTarget }),
     onSeek: (target, input) => {
       const video = videoRef.current;
@@ -144,6 +146,7 @@ export default function Player({
 
   return (
     <div ref={wrapRef} className={`relative bg-black overflow-hidden group ${className}`}>
+      <div className="absolute inset-0" inert={controlsLocked}>
       <video
         ref={videoRef}
         poster={poster}
@@ -195,6 +198,9 @@ export default function Player({
             </button>
             <span className="text-[11px] tabular-nums text-white/85">{fmtTime(seek.time)} / {fmtTime(duration)}</span>
             <div className="flex-1" />
+            <button onClick={() => setControlsLocked(true)} aria-label="锁定播放控制" title="锁定播放控制" aria-pressed={false} className="pressable">
+              <ILockF size={16} />
+            </button>
             <button onClick={cycleRate} className="text-[11px] font-bold text-white/85 pressable tabular-nums">{rate}x</button>
             <button onClick={toggleFull} aria-label="全屏" className="pressable">
               {full ? <ICompress size={16} /> : <IExpand size={16} />}
@@ -202,6 +208,8 @@ export default function Player({
           </div>
         </div>
       )}
+      </div>
+      {controlsLocked && <PlaybackLock active={active} onUnlock={() => setControlsLocked(false)} />}
     </div>
   );
 }

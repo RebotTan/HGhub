@@ -58,6 +58,7 @@ export default function Home({ active, bottomInset }: { active: boolean; bottomI
         <div className="absolute inset-0 flex items-center justify-center"><div className="w-9 h-9 spinner" /></div>
       )}
 
+
       {/* 移动端：静音 + 搜索（压在视频上，固定白字 + 半透明黑底） */}
       {!fs && (
         <div className="absolute inset-x-0 z-20 flex items-center px-3 pointer-events-none hg-player-ui" style={{ top: "calc(var(--sat, 0px) + 6px)" }}>

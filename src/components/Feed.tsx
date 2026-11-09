@@ -4,11 +4,12 @@ import type { Detail, Episode, Post, VideoCard } from "../types";
 import { useStore } from "../store";
 import { Avatar, Img, Sheet } from "./ui";
 import VideoSurface, { type VideoHandle } from "./VideoSurface";
+import PlaybackLock from "./PlaybackLock";
 import { ArticlePanel, CommentsPanel, EpisodesPanel } from "./Panels";
 import { setBackHandler } from "../back";
 import {
   IBack, IBoltF, IChevR, IClose, ICommentF, ICompress, IExpand, IFileText,
-  ILink, ILockF, IPauseF, IPlayF, IStar, IStarF, IVol, IVolMute,
+  ILink, ILockF, IPauseF, IPlayF, ISearch, IStar, IStarF, IVol, IVolMute,
 } from "../icons";
 
 type Props = {
@@ -48,6 +49,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const [vsize, setVsize] = useState({ w: 0, h: 0 });
   const [buffered, setBuffered] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [controlsLocked, setControlsLocked] = useState(false);
   const [rate, setRate] = useState(1);
   const [waiting, setWaiting] = useState(false);
   const [err, setErr] = useState("");
@@ -76,7 +78,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
   const [barPct, setBarPct] = useState<number | null>(null);
   const gesture = useRef<{
     x: number; y: number; startY: number; t: number; timer: number | null;
-    mode: "idle" | "hold" | "scrub"; base: number; width: number;
+    mode: "idle" | "hold" | "scrub" | "pan"; base: number; width: number; playing: boolean;
   } | null>(null);
 
   const curId = videoIds[index];
@@ -247,7 +249,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   /* 键盘 */
   useEffect(() => {
-    if (!active) return;
+    if (!active || controlsLocked) return;
     const fn = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
@@ -270,7 +272,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     window.addEventListener("keydown", fn);
     return () => window.removeEventListener("keydown", fn);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, panel, time, index]);
+  }, [active, controlsLocked, panel, time, index]);
 
   /* 安卓返回键：面板打开时先关面板 */
   useEffect(() => {
@@ -289,12 +291,14 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   /* —— 长按 2x（上滑锁定） / 横拖定位 / 单击暂停 —— */
   const onDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (controlsLocked || !active || gesture.current || e.button !== 0) return;
     const el = e.currentTarget;
     const width = el.clientWidth || 1;
     try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     const g = {
       x: e.clientX, y: e.clientY, startY: e.clientY, t: Date.now(), base: time, width,
-      mode: "idle" as "idle" | "hold" | "scrub",
+      mode: "idle" as "idle" | "hold" | "scrub" | "pan",
+      playing: videoRef.current?.el()?.paused === false,
       timer: window.setTimeout(() => {
         const cur = gesture.current;
         if (!cur || cur.mode !== "idle") return;
@@ -332,6 +336,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
         videoRef.current?.pause();
       } else if (Math.abs(dy) > 14) {
         if (g.timer) window.clearTimeout(g.timer);
+        g.mode = "pan";
       }
       return;
     }
@@ -345,7 +350,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     }
   };
 
-  const onUp = () => {
+  const onUp = (cancelled = false) => {
     const g = gesture.current;
     gesture.current = null;
     if (!g) return;
@@ -354,7 +359,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     if (g.mode === "hold") {
       holdRef.current = false;
       setHoldSpeed(false);
-      if (lockArmedRef.current) {
+      if (!cancelled && lockArmedRef.current) {
         setSpeedLock(true);
         toast("已锁定 2.0x 倍速 · 点顶部标签解除", "info");
       }
@@ -364,14 +369,27 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
     }
     if (g.mode === "scrub") {
       const target = scrubTarget.current;
-      if (target != null) videoRef.current?.seek(target, "mobile_gesture");
+      if (!cancelled && target != null) videoRef.current?.seek(target, "mobile_gesture");
       setScrub(null);
       scrubTarget.current = null;
-      if (!paused) videoRef.current?.play();
+      if (g.playing && active) videoRef.current?.play();
       return;
     }
-    if (Date.now() - g.t < 260) videoRef.current?.toggle();
+    if (!cancelled && g.mode === "idle" && Date.now() - g.t < 260) videoRef.current?.toggle();
   };
+
+  useEffect(() => {
+    if (!active || controlsLocked) onUp(true);
+    // Cancel pending gestures when the page is hidden or controls are locked.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, controlsLocked]);
+
+  useEffect(() => () => {
+    if (gesture.current?.timer) window.clearTimeout(gesture.current.timer);
+    gesture.current = null;
+  }, [playKey]);
+
+  const lockControls = () => { setPanel(null); setControlsLocked(true); };
 
   /* 长按倍速期间禁止原生滚动，否则上滑会被列表吃掉、锁不住倍速 */
   useEffect(() => {
@@ -466,7 +484,8 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
 
   return (
     <div
-      className={`hg-player-ui absolute inset-0 overflow-hidden bg-black player-root ${rotated ? "fs-landscape" : ""}`}>
+      className={`hg-player-ui absolute inset-0 overflow-hidden bg-black player-root ${controlsLocked ? "is-locked" : ""} ${rotated ? "fs-landscape" : ""}`}>
+      <div className="absolute inset-0" inert={controlsLocked}>
       {/* 氛围背景 */}
       <div className="absolute inset-0 scale-110 blur-3xl opacity-25 pointer-events-none">
         {posterUrl && <img src={posterUrl} alt="" className="w-full h-full object-cover" />}
@@ -480,7 +499,7 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
             <section key={vid} className="relative w-full h-full snap-start snap-always overflow-hidden">
               {isActive && playUrl ? (
                 <div className="absolute inset-0" style={{ touchAction: "pan-y" }}
-                  onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}>
+                  onPointerDown={onDown} onPointerMove={onMove} onPointerUp={() => onUp()} onPointerCancel={() => onUp(true)} onLostPointerCapture={() => onUp(true)}>
                 <VideoSurface ref={videoRef} src={playUrl} poster={posterUrl} autoPlay active={active} muted={muted}
                   diagnosticContext={{ active, view: mode, kind, video_id: curId, episode: curEp }}
                   volume={volume} rate={effRate}
@@ -522,9 +541,6 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
                     <button onClick={onBack} aria-label="返回" className="hg-chip w-9 h-9 rounded-full flex items-center justify-center pressable elev-1"><IBack size={20} /></button>
                     <span className="text-[14.5px] font-semibold hg-ink hg-ov-shadow truncate">{title}</span>
                     <span className="ml-auto px-2 py-0.5 rounded-full hg-chip text-[11px] font-semibold" style={{ color: "rgba(255,255,255,.9)" }}>{index + 1} / {videoIds.length}</span>
-                    <button onClick={() => setMuted((m) => !m)} aria-label={muted ? "取消静音" : "静音"} className="hg-chip w-9 h-9 rounded-full flex items-center justify-center pressable elev-1">
-                      {muted ? <IVolMute size={17} /> : <IVol size={17} />}
-                    </button>
                   </div>
               )}
 
@@ -767,6 +783,20 @@ export default function Feed({ videoIds, startIndex = 0, title = "", mode, kind 
             </div>
           </Sheet>
         </>
+      </div>
+      {!controlsLocked && active && (
+        <div className={`absolute z-40 flex items-center gap-2 ${fs ? "right-14" : "right-3"}`} style={{ top: "calc(var(--sat, 0px) + 6px)" }}>
+          {!fs && <button onClick={() => setMuted(m => !m)} aria-label={muted ? "取消静音" : "静音"}
+            className="hg-chip w-9 h-9 rounded-full flex items-center justify-center pressable elev-1">
+            {muted ? <IVolMute size={17} /> : <IVol size={17} />}
+          </button>}
+          <button onClick={lockControls} aria-label="锁定播放控制" title="锁定播放控制" aria-pressed={false}
+            className="hg-chip w-9 h-9 rounded-full flex items-center justify-center pressable elev-1"><ILockF size={17} /></button>
+          {!fs && <button onClick={() => store.setTab("search")} aria-label="搜索"
+            className="hg-chip w-9 h-9 rounded-full flex items-center justify-center pressable elev-1"><ISearch size={18} /></button>}
+        </div>
+      )}
+      {controlsLocked && <PlaybackLock active={active} onUnlock={() => setControlsLocked(false)} />}
     </div>
   );
 }
